@@ -43,12 +43,14 @@ jobs:
         echo ${{ github.token }} | gh auth login --with-token
 
         # Start ollama with nohup, stander and error log write to ollama.log
+        echo "starting ollama"
         nohup ollama serve > ollama.log 2>&1 &
 
         # Wait ollama serve as a service
         for times in {1..10}; do
           if curl -s http://127.0.0.1:11434/ | grep "Ollama is running"; then
             echo "Ollama is ready to serve."
+            source ~/.config/envman/PATH.env || true
 
             # pull model
             echo "start to pull model:${MODEL}"

@@ -24,53 +24,50 @@ jobs:
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
     runs-on: ubuntu-latest
 
+    env:
+      LLAMA_TAG: b11535
+      MODEL_REPO: ggml-org/Qwen3-1.7B-GGUF
+      MODEL_FILE: Qwen3-1.7B-Q4_K_M.gguf
+
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: set codellama as the default model
-      run:
-        printf "codellama" > model
+      - name: Cache llama.cpp + model
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            llama-bin
+            models
+          key: llama-${{ env.LLAMA_TAG }}-${{ env.MODEL_FILE }}
 
-    - name: Install and Setup Ollama and GH CLI
-      run: |
-        # Install Ollama and GH CLI
-        curl -fsSL https://ollama.com/install.sh | sh
-        curl -sS https://webi.sh/gh | sh
-        export PATH="$HOME/.local/bin:$PATH"
-        MODEL="$(cat model)"
+      - name: Fetch llama.cpp binaries
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p llama-bin
+          curl -sL -o /tmp/llama.tar.gz \
+            "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-ubuntu-x64.tar.gz"
+          tar xzf /tmp/llama.tar.gz -C llama-bin --strip-components=1
+      - name: Fetch model
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models
+          curl -sL -o "models/${MODEL_FILE}" \
+            "https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}"
 
-        export GITHUB_TOKEN=
-        echo ${{ github.token }} | gh auth login --with-token
-
-        # Start ollama with nohup, stander and error log write to ollama.log
-        echo "starting ollama"
-        nohup ollama serve > ollama.log 2>&1 &
-
-        # Wait ollama serve as a service
-        for times in {1..10}; do
-          if curl -s http://127.0.0.1:11434/ | grep "Ollama is running"; then
-            echo "Ollama is ready to serve."
-            source ~/.config/envman/PATH.env || true
-
-            # pull model
-            echo "start to pull model:${MODEL}"
-            ollama pull ${MODEL}
-            ollama list
-            exit 0
-          fi
-          echo "Waiting for ollama to start"
-          sleep 3
-        done
-        echo "Fail to start ollama as a service"
-        exit 1
-
-    - name: generate a cmake project
-      env: 
-        GITHUB_TOKEN: ${{ github.token }}
-      run: |
-        PROMPT="generate a cmake project for C++"
-        MODEL="$(cat model)"
-        echo "${MODEL} - ${PROMPT}"
-        curl -s http://127.0.0.1:11434/api/generate -d '{"model": "${MODEL}", "prompt": "${PROMPT}.", "stream": false}' | jq -r '.response'
-
-        gh pr comment ${{ github.event.pull_request.number }} --body "${MODEL} - ${PROMPT}"
+      - name: Run inference
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/llama-bin
+          PROMPT: ${{ 'generate a C++ cmake project.' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./llama-bin/llama-cli \
+            -m "models/${MODEL_FILE}" \
+            -p "$PROMPT" \
+            -n 64 \
+            -t 2 \
+            --no-warmup 2>&1 | tee /tmp/out.txt
+          echo "### Output" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/out.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

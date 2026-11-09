@@ -53,7 +53,7 @@ jobs:
         exit 1
       shell: bash
 
-      name: generate a cmake project
+    name: generate a cmake project
       env: 
         GITHUB_TOKEN: ${{ github.token }}
         model: codellama

@@ -22,18 +22,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Get changed files
-      id: changed-files
-      uses: tj-actions/changed-files@v47
+    # - name: Get changed files
+    #   id: changed-files
+    #   uses: tj-actions/changed-files@v47
 
-    - name: List all changed files
-      shell: bash
-      env:
-        ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
-      run: |
-        for file in ${ALL_CHANGED_FILES}; do
-          echo "$file was changed"
-        done
+    # - name: List all changed files
+    #   shell: bash
+    #   env:
+    #     ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+    #   run: |
+    #     for file in ${ALL_CHANGED_FILES}; do
+    #       echo "$file was changed"
+    #     done
 
     - name: Install and Setup Ollama and GH CLI
       run: |
@@ -54,8 +54,8 @@ jobs:
             echo "Ollama is ready to serve."
 
             # pull model
-            echo "start to pull model:${{ inputs.model }}"
-            ollama pull ${{ inputs.model }}
+            echo "start to pull model:${{ env.model }}"
+            ollama pull ${{ env.model }}
             ollama list
             exit 0
           fi
@@ -66,25 +66,13 @@ jobs:
         exit 1
       shell: bash
 
-    - name: Review code
+    - name: generate a cmake project
       env:
         GITHUB_TOKEN: ${{ github.token }}
+        model: codellama
       run: |
-        for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-          echo $file
-          content=$(cat "$file")
-          content=${content//\'/\'\'}
-          content=${content//\"/\\\"}
-          content=$(echo "$content" | tr '\n' ' ')
-          review=$(curl -s http://127.0.0.1:11434/api/generate -d '{"model": "${{ inputs.model }}", "prompt": "As a software engineer, please review the following code, provide suggestions for improvement, coding best practices, improve readability, and maintainability.:\n\n```\n'"${content}"'\n```", "stream": false}' | jq -r '.response')
-          echo $review
-
-          if [[ $review == "null" ]]
-          then
-            comments="Ollama Code Review for \`$file\`: All good!"
-          else
-            comments="Ollama Code Review for \`$file\`:\n\n$review"
-          fi
+          PROMPT="generate a cmake project for C++"
+          curl -s http://127.0.0.1:11434/api/generate -d '{"model": "${{ env.model }}", "prompt": "${PROMPT}.:\n\n```\n'""'\n```", "stream": false}' | jq -r '.response'
 
           gh pr comment ${{ github.event.pull_request.number }} --body "${comments}"
         done

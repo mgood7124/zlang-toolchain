@@ -70,6 +70,7 @@ jobs:
       run: |
         PROMPT="generate a cmake project for C++"
         MODEL="$(cat model)"
-        curl -s http://127.0.0.1:11434/api/generate -d '{"model": "${MODEL}", "prompt": "${PROMPT}.:\n\n```\n'""'\n```", "stream": false}' | jq -r '.response'
+        echo "${MODEL} - ${PROMPT}"
+        curl -s http://127.0.0.1:11434/api/generate -d '{"model": "${MODEL}", "prompt": "${PROMPT}.", "stream": false}' | jq -r '.response'
 
         gh pr comment ${{ github.event.pull_request.number }} --body "${MODEL} - ${PROMPT}"

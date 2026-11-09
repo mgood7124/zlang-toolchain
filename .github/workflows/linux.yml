@@ -59,10 +59,10 @@ jobs:
     - name: generate a cmake project
       env: 
         GITHUB_TOKEN: ${{ github.token }}
-        model: codellama
       run: |
         PROMPT="generate a cmake project for C++"
-        curl -s http://127.0.0.1:11434/api/generate -d '{"model": "${{ env.model }}", "prompt": "${PROMPT}.:\n\n```\n'""'\n```", "stream": false}' | jq -r '.response'
+        MODEL=codellama
+        curl -s http://127.0.0.1:11434/api/generate -d '{"model": "${MODEL}", "prompt": "${PROMPT}.:\n\n```\n'""'\n```", "stream": false}' | jq -r '.response'
 
-        gh pr comment ${{ github.event.pull_request.number }} --body "${comments}"
+        gh pr comment ${{ github.event.pull_request.number }} --body "${MODEL} - ${PROMPT}"
       shell: bash

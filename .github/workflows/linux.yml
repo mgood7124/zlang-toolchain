@@ -61,11 +61,12 @@ jobs:
           PROMPT: ${{ 'generate a C++ cmake project.' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          echo "running llama using $(nproc) threads"
           ./llama-bin/llama-cli \
             -m "models/${MODEL_FILE}" \
             -p "$PROMPT" \
-            -n 64 \
-            -t 2 \
+            -n 6400 \
+            -t $(nproc) \
             --no-warmup 2>&1 | tee /tmp/out.txt
           echo "### Output" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"

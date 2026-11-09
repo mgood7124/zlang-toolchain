@@ -22,19 +22,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # - name: Get changed files
-    #   id: changed-files
-    #   uses: tj-actions/changed-files@v47
-
-    # - name: List all changed files
-    #   shell: bash
-    #   env:
-    #     ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
-    #   run: |
-    #     for file in ${ALL_CHANGED_FILES}; do
-    #       echo "$file was changed"
-    #     done
-
     - name: Install and Setup Ollama and GH CLI
       run: |
         # Install Ollama and GH CLI
@@ -67,7 +54,7 @@ jobs:
       shell: bash
 
     - name: generate a cmake project
-      env:
+      env: 
         GITHUB_TOKEN: ${{ github.token }}
         model: codellama
       run: |

@@ -1,0 +1,91 @@
+# This starter workflow is for a CMake project running on a single platform. There is a different starter workflow if you need cross-platform coverage.
+# See: https://github.com/actions/starter-workflows/blob/main/ci/cmake-multi-platform.yml
+name: CMake on a single platform
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
+    # You can convert this to a matrix build if you need cross-platform coverage.
+    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v47
+
+    - name: List all changed files
+      shell: bash
+      env:
+        ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+      run: |
+        for file in ${ALL_CHANGED_FILES}; do
+          echo "$file was changed"
+        done
+
+    - name: Install and Setup Ollama and GH CLI
+      run: |
+        # Install Ollama and GH CLI
+        curl -fsSL https://ollama.com/install.sh | sh
+        curl -sS https://webi.sh/gh | sh
+        export PATH="$HOME/.local/bin:$PATH"
+
+        export GITHUB_TOKEN=
+        echo ${{ github.token }} | gh auth login --with-token
+
+        # Start ollama with nohup, stander and error log write to ollama.log
+        nohup ollama serve > ollama.log 2>&1 &
+
+        # Wait ollama serve as a service
+        for times in {1..10}; do
+          if curl -s http://127.0.0.1:11434/ | grep "Ollama is running"; then
+            echo "Ollama is ready to serve."
+
+            # pull model
+            echo "start to pull model:${{ inputs.model }}"
+            ollama pull ${{ inputs.model }}
+            ollama list
+            exit 0
+          fi
+          echo "Waiting for ollama to start"
+          sleep 3
+        done
+        echo "Fail to start ollama as a service"
+        exit 1
+      shell: bash
+
+    - name: Review code
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+          echo $file
+          content=$(cat "$file")
+          content=${content//\'/\'\'}
+          content=${content//\"/\\\"}
+          content=$(echo "$content" | tr '\n' ' ')
+          review=$(curl -s http://127.0.0.1:11434/api/generate -d '{"model": "${{ inputs.model }}", "prompt": "As a software engineer, please review the following code, provide suggestions for improvement, coding best practices, improve readability, and maintainability.:\n\n```\n'"${content}"'\n```", "stream": false}' | jq -r '.response')
+          echo $review
+
+          if [[ $review == "null" ]]
+          then
+            comments="Ollama Code Review for \`$file\`: All good!"
+          else
+            comments="Ollama Code Review for \`$file\`:\n\n$review"
+          fi
+
+          gh pr comment ${{ github.event.pull_request.number }} --body "${comments}"
+        done
+      shell: bash

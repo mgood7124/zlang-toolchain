@@ -7,6 +7,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 defaults:
   run:
@@ -26,12 +27,17 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: set codellama as the default model
+      run:
+        printf "codellama" > model
+
     - name: Install and Setup Ollama and GH CLI
       run: |
         # Install Ollama and GH CLI
         curl -fsSL https://ollama.com/install.sh | sh
         curl -sS https://webi.sh/gh | sh
         export PATH="$HOME/.local/bin:$PATH"
+        MODEL="$(cat model)"
 
         export GITHUB_TOKEN=
         echo ${{ github.token }} | gh auth login --with-token
@@ -45,8 +51,8 @@ jobs:
             echo "Ollama is ready to serve."
 
             # pull model
-            echo "start to pull model:${{ env.model }}"
-            ollama pull ${{ env.model }}
+            echo "start to pull model:${MODEL}"
+            ollama pull ${MODEL}
             ollama list
             exit 0
           fi
@@ -61,7 +67,7 @@ jobs:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
         PROMPT="generate a cmake project for C++"
-        MODEL=codellama
+        MODEL="$(cat model)"
         curl -s http://127.0.0.1:11434/api/generate -d '{"model": "${MODEL}", "prompt": "${PROMPT}.:\n\n```\n'""'\n```", "stream": false}' | jq -r '.response'
 
         gh pr comment ${{ github.event.pull_request.number }} --body "${MODEL} - ${PROMPT}"

@@ -69,5 +69,4 @@ jobs:
             --yolo \
             -m "models/${MODEL_FILE}" \
             -n 6400 \
-            -t $(nproc) \
-            --no-warmup
+            -t $(nproc)

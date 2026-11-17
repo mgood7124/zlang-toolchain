@@ -66,7 +66,7 @@ jobs:
           echo "/models" > .gitignore
           echo "/llama-bin" >> .gitignore
           git add .gitignore
-          git commmit -m "add .gitignore"
+          git commit -m "add .gitignore"
           git push
 
       - name: check git status

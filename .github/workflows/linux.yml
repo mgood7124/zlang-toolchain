@@ -59,6 +59,13 @@ jobs:
           curl -sL -o "models/${MODEL_FILE}" \
             "https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}"
 
+      - name: set git ident
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config --global user.email "none"
+          git config --global user.name "Qwen3"
+
       - name: add files to .gitignore
         env:
           GITHUB_TOKEN: ${{ github.token }}

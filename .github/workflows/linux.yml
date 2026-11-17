@@ -59,6 +59,9 @@ jobs:
           curl -sL -o "models/${MODEL_FILE}" \
             "https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}"
 
+      - name: check git status
+        run: git status
+
       - name: Run llama-agent
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/llama-bin
@@ -70,3 +73,6 @@ jobs:
             -m "models/${MODEL_FILE}" \
             -n 6400 \
             -t $(nproc)
+
+      - name: check git status
+        run: git status

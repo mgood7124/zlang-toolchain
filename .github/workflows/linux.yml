@@ -62,14 +62,12 @@ jobs:
       - name: Run llama-agent
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/llama-bin
-          PROMPT: ${{ 'generate a C++ cmake project.' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           echo "running llama-agent using $(nproc) threads"
-          ./llama-bin/llama-agent \
+          echo "generate a C++ cmake project." | ./llama-bin/llama-agent \
             --yolo \
             -m "models/${MODEL_FILE}" \
-            -p "$PROMPT\n/exit" \
             -n 6400 \
             -t $(nproc) \
             --no-warmup 2>&1 | tee /tmp/out.txt

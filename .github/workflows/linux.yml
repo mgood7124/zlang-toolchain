@@ -68,7 +68,7 @@ jobs:
           echo "running llama-agent using $(nproc) threads"
           ./llama-bin/llama-agent \
             -m "models/${MODEL_FILE}" \
-            -p "$PROMPT" \
+            -p "$PROMPT\n/exit" \
             -n 6400 \
             -t $(nproc) \
             --no-warmup 2>&1 | tee /tmp/out.txt

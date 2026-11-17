@@ -67,6 +67,7 @@ jobs:
         run: |
           echo "running llama-agent using $(nproc) threads"
           ./llama-bin/llama-agent \
+            --yolo \
             -m "models/${MODEL_FILE}" \
             -p "$PROMPT\n/exit" \
             -n 6400 \

@@ -68,6 +68,18 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           echo "running llama-agent using $(nproc) threads"
+          echo "generate a skills.md file for cmake and show me how i can use it with ./llama-bin/llama-agent" | ./llama-bin/llama-agent \
+            --yolo \
+            -m "models/${MODEL_FILE}" \
+            -n 6400 \
+            -t $(nproc)
+
+      - name: Run llama-agent
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/llama-bin
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "running llama-agent using $(nproc) threads"
           echo "generate a C++ cmake project. ensure all arguments to any cmake functions are correctly quoted. also ensure all source files are generated and that the project correctly builds and generates a working executable, make sure to fix all command line errors and tooling errors, verify that the executable can be executed without errors." | ./llama-bin/llama-agent \
             --yolo \
             -m "models/${MODEL_FILE}" \

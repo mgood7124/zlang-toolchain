@@ -70,8 +70,4 @@ jobs:
             -m "models/${MODEL_FILE}" \
             -n 6400 \
             -t $(nproc) \
-            --no-warmup 2>&1 | tee /tmp/out.txt
-          echo "### Output" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cat /tmp/out.txt >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+            --no-warmup

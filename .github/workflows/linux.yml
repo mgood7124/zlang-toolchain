@@ -26,6 +26,7 @@ jobs:
 
     env:
       LLAMA_TAG: b11535
+      LLAMA_AGENT_TAG: b11604
       MODEL_REPO: ggml-org/Qwen3-1.7B-GGUF
       MODEL_FILE: Qwen3-1.7B-Q4_K_M.gguf
 
@@ -48,6 +49,9 @@ jobs:
           curl -sL -o /tmp/llama.tar.gz \
             "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-bin-ubuntu-x64.tar.gz"
           tar xzf /tmp/llama.tar.gz -C llama-bin --strip-components=1
+          curl -sL -o /tmp/llama.agent.tar.gz \
+            "https://github.com/gary149/llama-agent/releases/download/${LLAMA_AGENT_TAG}/llama-agent-${LLAMA_AGENT_TAG}-bin-ubuntu-x64.tar.gz"
+          tar xzf /tmp/llama.agent.tar.gz -C llama-bin --strip-components=1
       - name: Fetch model
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -55,14 +59,14 @@ jobs:
           curl -sL -o "models/${MODEL_FILE}" \
             "https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}"
 
-      - name: Run inference
+      - name: Run llama-agent
         env:
           LD_LIBRARY_PATH: ${{ github.workspace }}/llama-bin
           PROMPT: ${{ 'generate a C++ cmake project.' }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          echo "running llama using $(nproc) threads"
-          ./llama-bin/llama-cli \
+          echo "running llama-agent using $(nproc) threads"
+          ./llama-bin/llama-agent \
             -m "models/${MODEL_FILE}" \
             -p "$PROMPT" \
             -n 6400 \

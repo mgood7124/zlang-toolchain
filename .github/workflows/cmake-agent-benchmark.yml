@@ -13,9 +13,55 @@ on:
           - gemma-4-e4b
           - qwen3-8b
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
+  # Job 0: Purge ONLY legacy caches from the old prepare setup (preserves new separate caches)
+  clean-stale-caches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Delete legacy old-prepare caches only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          API_HOST="://github.com"
+          REPO="${{ github.repository }}"
+
+          CACHE_IDS=$(curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://${API_HOST}/repos/${REPO}/actions/caches?per_page=100" \
+            | jq -r '
+                .actions_caches[]
+                | select(
+                    (.key | startswith("llama-agent-all-models-"))
+                    or (.key | startswith("llama-agent-qwen"))
+                    or (.key | startswith("llama-agent-gemma"))
+                  )
+                | .id
+              ')
+
+          if [ -z "$CACHE_IDS" ]; then
+            echo "No legacy old-prepare caches found. New separate caches preserved."
+            exit 0
+          fi
+
+          for id in $CACHE_IDS; do
+            echo "Deleting legacy global Actions cache ID: $id"
+            curl -fsSL -X DELETE \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://${API_HOST}/repos/${REPO}/actions/caches/${id}"
+          done
+
   # Job 1: Cache llama-agent binary in parallel
   prep-binary:
+    needs: clean-stale-caches
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -44,6 +90,7 @@ jobs:
 
   # Job 2: Cache Qwen2.5-Coder-7B in parallel
   prep-qwen25-coder-7b:
+    needs: clean-stale-caches
     if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen25-coder-7b' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -66,6 +113,7 @@ jobs:
 
   # Job 3: Cache Gemma-4-E4B in parallel
   prep-gemma-4-e4b:
+    needs: clean-stale-caches
     if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'gemma-4-e4b' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -88,6 +136,7 @@ jobs:
 
   # Job 4: Cache Qwen3-8B in parallel
   prep-qwen3-8b:
+    needs: clean-stale-caches
     if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-8b' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15

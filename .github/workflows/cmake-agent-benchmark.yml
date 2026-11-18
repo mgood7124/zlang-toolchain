@@ -121,10 +121,8 @@ jobs:
           ~/.local/bin/llama-agent --version
 
       - name: Run CMake multi-step agent loop (${{ matrix.id }})
-        env:
-          PATH: ${{ env.PATH }}:${{ runner.home }}/.local/bin
         run: |
-          llama-agent \
+          "$HOME/.local/bin/llama-agent" \
             --hf-repo "$MODEL_REPO" \
             --hf-file "$MODEL_FILE" \
             --threads 4 \

@@ -14,24 +14,36 @@ on:
           - qwen3-8b
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Build dynamic model matrix
+        id: set-matrix
+        run: |
+          CHOICE="${{ inputs.model_choice }}"
+          FULL_MATRIX='[
+            {"id":"qwen25-coder-7b","MODEL_REPO":"Qwen/Qwen2.5-Coder-7B-Instruct-GGUF","MODEL_FILE":"qwen2.5-coder-7b-instruct-q4_k_m.gguf"},
+            {"id":"gemma-4-e4b","MODEL_REPO":"unsloth/gemma-4-E4B-it-GGUF","MODEL_FILE":"gemma-4-E4B-it-UD-Q4_K_XL.gguf"},
+            {"id":"qwen3-8b","MODEL_REPO":"Qwen/Qwen3-8B-GGUF","MODEL_FILE":"Qwen3-8B-Q4_K_M.gguf"}
+          ]'
+
+          if [ "$CHOICE" = "all" ]; then
+            SELECTED=$(echo "$FULL_MATRIX" | jq -c '.')
+          else
+            SELECTED=$(echo "$FULL_MATRIX" | jq -c --arg id "$CHOICE" '[.[] | select(.id == $id)]')
+          fi
+
+          echo "matrix={\"include\":$SELECTED}" >> "$GITHUB_OUTPUT"
+
   cmake-agent-eval:
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - id: qwen25-coder-7b
-            MODEL_REPO: Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
-            MODEL_FILE: qwen2.5-coder-7b-instruct-q4_k_m.gguf
-          - id: gemma-4-e4b
-            MODEL_REPO: unsloth/gemma-4-E4B-it-GGUF
-            MODEL_FILE: gemma-4-E4B-it-UD-Q4_K_XL.gguf
-          - id: qwen3-8b
-            MODEL_REPO: Qwen/Qwen3-8B-GGUF
-            MODEL_FILE: Qwen3-8B-Q4_K_M.gguf
-
-    if: ${{ github.event.inputs.model_choice == 'all' || github.event.inputs.model_choice == matrix.id }}
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     env:
       MODEL_REPO: ${{ matrix.MODEL_REPO }}
@@ -77,7 +89,6 @@ jobs:
           report-*.md
           patch-*.diff
           EOF
-          # Deduplicate lines while preserving order
           awk '!seen[$0]++' .gitignore > .gitignore.tmp && mv .gitignore.tmp .gitignore
 
       - name: Install CMake & C++ build tools
@@ -127,7 +138,6 @@ jobs:
           echo "=== DIFF STAT ==="
           git diff --stat
 
-          # Write full report to both a file artifact and the GitHub Actions Job Summary UI
           {
             echo "## Model Evaluation: \`${{ matrix.id }}\`"
             echo "### Git Status"
@@ -160,7 +170,6 @@ jobs:
             fi
           } | tee "report-${{ matrix.id }}.md" >> "$GITHUB_STEP_SUMMARY"
 
-          # Export raw unified patch (including newly added files via git add -N)
           git add -N .
           git diff > "patch-${{ matrix.id }}.diff"
 

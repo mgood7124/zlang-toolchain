@@ -150,11 +150,11 @@ jobs:
     timeout-minutes: 25
     strategy:
       fail-fast: false
-      matrix: \${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     env:
-      MODEL_REPO: \${{ matrix.MODEL_REPO }}
-      MODEL_FILE: \${{ matrix.MODEL_FILE }}
+      MODEL_REPO: ${{ matrix.MODEL_REPO }}
+      MODEL_FILE: ${{ matrix.MODEL_FILE }}
       OMP_NUM_THREADS: 4
 
     steps:
@@ -167,17 +167,17 @@ jobs:
           path: ~/.local/bin
           key: llama-agent-bin-b11604-v1
 
-      - name: Restore model GGUF (\${{ matrix.id }})
+      - name: Restore model GGUF (${{ matrix.id }})
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/llama.cpp
-          key: gguf-\${{ matrix.id }}-v1
+          key: gguf-${{ matrix.id }}-v1
 
       - name: Configure runtime paths
         run: |
-          echo "HOME/.local/bin" >> "GITHUB_PATH"
-          echo "LD_LIBRARY_PATH=\$HOME/.local/bin:\({LD_LIBRARY_PATH}" >> "\)GITHUB_ENV"
-          "\$HOME/.local/bin/llama-agent" --version
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$HOME/.local/bin:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          "$HOME/.local/bin/llama-agent" --version
 
       - name: Ensure CMake & benchmark ignore rules in .gitignore
         run: |
@@ -216,21 +216,21 @@ jobs:
           patch-*.diff
           output-*.html
           EOF
-          awk '!seen[\$0]++' .gitignore > .gitignore.tmp && mv .gitignore.tmp .gitignore
+          awk '!seen[$0]++' .gitignore > .gitignore.tmp && mv .gitignore.tmp .gitignore
 
       - name: Install CMake & C++ build tools
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++
 
-      - name: Run CMake multi-step agent loop (\${{ matrix.id }})
+      - name: Run CMake multi-step agent loop (${{ matrix.id }})
         id: run-agent
         continue-on-error: true
         run: |
           set -o pipefail
-          "\$HOME/.local/bin/llama-agent" \
-            --hf-repo "\$MODEL_REPO" \
-            --hf-file "\$MODEL_FILE" \
+          "$HOME/.local/bin/llama-agent" \
+            --hf-repo "$MODEL_REPO" \
+            --hf-file "$MODEL_FILE" \
             --threads 4 \
             --ctx-size 12288 \
             --max-turns 12 \
@@ -239,90 +239,91 @@ jobs:
             2. Add unit tests covering normal and edge cases and wire them into CTest.
             3. Configure and build the project using: cmake -B build -G Ninja && cmake --build build
             4. Run ctest --test-dir build --output-on-failure and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass." \
-            2>&1 | tee "agent-output-\${{ matrix.id }}.log"
+            2>&1 | tee "agent-output-${{ matrix.id }}.log"
 
-      - name: Inspect generated files & upload to Gist (\${{ matrix.id }})
+      - name: Inspect generated files & upload to Gist (${{ matrix.id }})
         if: always()
         env:
-          GIST_TOKEN: \${{ secrets.GIST_TOKEN }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: |
+          FENCE='```'
           {
-            echo "# Model Evaluation: \`\${{ matrix.id }}\`"
-            echo "- **Repository:** \`\${{ github.repository }}\`"
-            echo "- **Model:** \`\({{ matrix.MODEL_REPO }}\` (\`\){{ matrix.MODEL_FILE }}\`)"
-            echo "- **Agent Exit Outcome:** \`\${{ steps.run-agent.outcome }}\`"
+            echo "# Model Evaluation: ${{ matrix.id }}"
+            echo "- Repository: ${{ github.repository }}"
+            echo "- Model: ${{ matrix.MODEL_REPO }} (${{ matrix.MODEL_FILE }})"
+            echo "- Agent Exit Outcome: ${{ steps.run-agent.outcome }}"
             echo ""
             echo "## Git Status"
-            echo '```text'
+            echo "${FENCE}text"
             git status --short || echo "(no changes)"
-            echo '```'
+            echo "${FENCE}"
             echo "## Diff Stats"
-            echo '```text'
+            echo "${FENCE}text"
             git diff --stat || echo "(no modified tracked files)"
-            echo '```'
+            echo "${FENCE}"
             echo "## Modified Files Diff"
-            echo '```diff'
+            echo "${FENCE}diff"
             git diff
-            echo '```'
+            echo "${FENCE}"
             echo "## Newly Generated Files"
-            UNTRACKED=\$(git ls-files --others --exclude-standard)
-            if [ -z "\$UNTRACKED" ]; then
+            UNTRACKED=$(git ls-files --others --exclude-standard)
+            if [ -z "$UNTRACKED" ]; then
               echo "_No new untracked files generated._"
             else
-              for f in \$UNTRACKED; do
-                echo "### \`\$f\`"
-                echo '```cpp'
+              for f in $UNTRACKED; do
+                echo "### $f"
+                echo "${FENCE}cpp"
                 cat "$f"
                 echo ""
-                echo '```'
+                echo "${FENCE}"
               done
             fi
-          } > "report-\${{ matrix.id }}.md"
+          } > "report-${{ matrix.id }}.md"
 
           git add -N .
-          git diff > "patch-\${{ matrix.id }}.diff"
-          touch "agent-output-\${{ matrix.id }}.log"
+          git diff > "patch-${{ matrix.id }}.diff"
+          touch "agent-output-${{ matrix.id }}.log"
 
           GIST_URL=""
-          if [ -n "\$GIST_TOKEN" ]; then
+          if [ -n "$GIST_TOKEN" ]; then
             jq -n \
-              --arg desc "CMake Agent Output (\${{ matrix.id }}) - \({{ github.repository }} #\){{ github.run_number }}" \
-              --rawfile log "agent-output-\${{ matrix.id }}.log" \
-              --rawfile report "report-\${{ matrix.id }}.md" \
-              --rawfile patch "patch-\${{ matrix.id }}.diff" \
+              --arg desc "CMake Agent Output (${{ matrix.id }}) - ${{ github.repository }} #${{ github.run_number }}" \
+              --rawfile log "agent-output-${{ matrix.id }}.log" \
+              --rawfile report "report-${{ matrix.id }}.md" \
+              --rawfile patch "patch-${{ matrix.id }}.diff" \
               '{
-                description: \$desc,
+                description: $desc,
                 public: false,
                 files: {
-                  ("1-agent-output-" + "\${{ matrix.id }}" + ".log"): { content: (if (log | length) > 0 then log else "(empty log)" end) },
-                  ("2-report-" + "\${{ matrix.id }}" + ".md"): { content: (if (report | length) > 0 then report else "(empty report)" end) },
-                  ("3-patch-" + "\${{ matrix.id }}" + ".diff"): { content: (if (patch | length) > 0 then patch else "(no diff generated)" end) }
+                  ("1-agent-output-" + "${{ matrix.id }}" + ".log"): { content: (if (log | length) > 0 then log else "(empty log)" end) },
+                  ("2-report-" + "${{ matrix.id }}" + ".md"): { content: (if (report | length) > 0 then report else "(empty report)" end) },
+                  ("3-patch-" + "${{ matrix.id }}" + ".diff"): { content: (if (patch | length) > 0 then patch else "(no diff generated)" end) }
                 }
               }' > /tmp/gist-payload.json
 
             API_HOST="://github.com"
-            RESPONSE=\$(curl -sS -X POST "https://\${API_HOST}/gists" \
-              -H "Authorization: Bearer \$GIST_TOKEN" \
+            RESPONSE=$(curl -sS -X POST "https://${API_HOST}/gists" \
+              -H "Authorization: Bearer $GIST_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               --data-binary @/tmp/gist-payload.json)
 
-            GIST_URL=(echo "RESPONSE" | jq -r '.html_url // empty')
-            echo "Uploaded Gist: \$GIST_URL"
+            GIST_URL=$(echo "$RESPONSE" | jq -r '.html_url // empty')
+            echo "Uploaded Gist: $GIST_URL"
           fi
 
           {
-            echo "## Model Evaluation: \`\${{ matrix.id }}\`"
-            if [ -n "\$GIST_URL" ]; then
-              echo "**Full Report & Patch Gist:** [\(GIST_URL](\)GIST_URL)"
+            echo "## Model Evaluation: ${{ matrix.id }}"
+            if [ -n "$GIST_URL" ]; then
+              echo "**Full Report & Patch Gist:** [$GIST_URL]($GIST_URL)"
             else
-              echo "_Gist upload skipped (set \`secrets.GIST_TOKEN\` to enable). Download artifacts below._"
+              echo "_Gist upload skipped (set secrets.GIST_TOKEN to enable). Download artifacts below._"
             fi
             echo ""
             echo "### Git Status"
-            echo '```text'
+            echo "${FENCE}text"
             git status --short || echo "(no changes)"
-            echo '```'
+            echo "${FENCE}"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${{ steps.run-agent.outcome }}" != "success" ]; then

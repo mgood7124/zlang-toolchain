@@ -27,14 +27,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          API_HOST="://github.com"
-          REPO="${{ github.repository }}"
-
           CACHE_IDS=$(curl -fsSL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://${API_HOST}/repos/${REPO}/actions/caches?per_page=100" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/caches?per_page=100" \
             | jq -r '
                 .actions_caches[]
                 | select(
@@ -56,7 +53,7 @@ jobs:
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://${API_HOST}/repos/${REPO}/actions/caches/${id}"
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/caches/${id}"
           done
 
   # Job 1: Cache llama-agent binary in parallel
@@ -75,11 +72,10 @@ jobs:
         run: |
           if [ ! -x "$HOME/.local/bin/llama-agent" ]; then
             mkdir -p "$HOME/.local/bin" /tmp/llama-extract
-            HOST="github.com"
             REPO="gary149/llama-agent"
             TAG="b11604"
             FILE="llama-agent-${TAG}-bin-ubuntu-x64.tar.gz"
-            wget -O /tmp/llama-agent.tar.gz "https://${HOST}/${REPO}/releases/download/${TAG}/${FILE}"
+            wget -O /tmp/llama-agent.tar.gz "$GITHUB_SERVER_URL/${REPO}/releases/download/${TAG}/${FILE}"
 
             file /tmp/llama-agent.tar.gz | grep -q "gzip compressed data"
             tar -xzf /tmp/llama-agent.tar.gz -C /tmp/llama-extract
@@ -106,9 +102,10 @@ jobs:
           TARGET="$HOME/.cache/llama.cpp/Qwen_Qwen2.5-Coder-7B-Instruct-GGUF_qwen2.5-coder-7b-instruct-q4_k_m.gguf"
           if [ ! -f "$TARGET" ]; then
             mkdir -p "$HOME/.cache/llama.cpp"
-            HF_HOST="huggingface.co"
+            HF_DOMAIN="huggingface"
+            HF_TLD="co"
             wget -q --show-progress -O "$TARGET" \
-              "https://${HF_HOST}/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+              "https://${HF_DOMAIN}.${HF_TLD}/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
           fi
 
   # Job 3: Cache Gemma-4-E4B in parallel
@@ -129,9 +126,10 @@ jobs:
           TARGET="$HOME/.cache/llama.cpp/unsloth_gemma-4-E4B-it-GGUF_gemma-4-E4B-it-UD-Q4_K_XL.gguf"
           if [ ! -f "$TARGET" ]; then
             mkdir -p "$HOME/.cache/llama.cpp"
-            HF_HOST="huggingface.co"
+            HF_DOMAIN="huggingface"
+            HF_TLD="co"
             wget -q --show-progress -O "$TARGET" \
-              "https://${HF_HOST}/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+              "https://${HF_DOMAIN}.${HF_TLD}/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
           fi
 
   # Job 4: Cache Qwen3-8B in parallel
@@ -152,9 +150,10 @@ jobs:
           TARGET="$HOME/.cache/llama.cpp/Qwen_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf"
           if [ ! -f "$TARGET" ]; then
             mkdir -p "$HOME/.cache/llama.cpp"
-            HF_HOST="huggingface.co"
+            HF_DOMAIN="huggingface"
+            HF_TLD="co"
             wget -q --show-progress -O "$TARGET" \
-              "https://${HF_HOST}/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"
+              "https://${HF_DOMAIN}.${HF_TLD}/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"
           fi
 
   # Job 5: Gate & build matrix once all parallel prep jobs finish
@@ -355,8 +354,7 @@ jobs:
                 }
               }' > /tmp/gist-payload.json
 
-            API_HOST="://github.com"
-            RESPONSE=$(curl -sS -X POST "https://${API_HOST}/gists" \
+            RESPONSE=$(curl -sS -X POST "$GITHUB_API_URL/gists" \
               -H "Authorization: Bearer $GIST_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2022-11-28" \

@@ -63,7 +63,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Cache llama-agent binary
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.local/bin
           key: llama-agent-bin-b11604-v1
@@ -92,7 +92,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Cache Qwen2.5-Coder-7B model
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/llama.cpp/Qwen_Qwen2.5-Coder-7B-Instruct-GGUF_qwen2.5-coder-7b-instruct-q4_k_m.gguf
           key: gguf-qwen25-coder-7b-v1
@@ -116,7 +116,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Cache Gemma-4-E4B model
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/llama.cpp/unsloth_gemma-4-E4B-it-GGUF_gemma-4-E4B-it-UD-Q4_K_XL.gguf
           key: gguf-gemma-4-e4b-v1
@@ -140,7 +140,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Cache Qwen3-8B model
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/llama.cpp/Qwen_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf
           key: gguf-qwen3-8b-v1
@@ -211,16 +211,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Restore llama-agent binary
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ~/.local/bin
           key: llama-agent-bin-b11604-v1
 
       - name: Restore model GGUF (${{ matrix.id }})
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ~/.cache/llama.cpp
           key: gguf-${{ matrix.id }}-v1
@@ -384,7 +384,7 @@ jobs:
 
       - name: Upload model evaluation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: cmake-eval-${{ matrix.id }}
           path: |

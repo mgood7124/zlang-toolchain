@@ -37,22 +37,147 @@ jobs:
 
           echo "matrix={\"include\":$SELECTED}" >> "$GITHUB_OUTPUT"
 
+      - name: Cache llama-agent binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin
+          key: llama-agent-bin-b11604-v1
+
+      - name: Install llama-agent binary (if missing)
+        run: |
+          if [ ! -x "$HOME/.local/bin/llama-agent" ]; then
+            mkdir -p "$HOME/.local/bin" /tmp/llama-extract
+            HOST="github.com"
+            REPO="gary149/llama-agent"
+            TAG="b11604"
+            FILE="llama-agent-${TAG}-bin-ubuntu-x64.tar.gz"
+            wget -O /tmp/llama-agent.tar.gz "https://${HOST}/${REPO}/releases/download/${TAG}/${FILE}"
+
+            file /tmp/llama-agent.tar.gz | grep -q "gzip compressed data"
+            tar -xzf /tmp/llama-agent.tar.gz -C /tmp/llama-extract
+            find /tmp/llama-extract -type f \( -name "llama-agent" -o -name "*.so*" \) -exec cp -P {} "$HOME/.local/bin/" \;
+            chmod +x "$HOME/.local/bin/llama-agent"
+            rm -rf /tmp/llama-agent.tar.gz /tmp/llama-extract
+          fi
+          "$HOME/.local/bin/llama-agent" --version
+
+      - name: Check cache for Qwen2.5-Coder-7B
+        id: check-qwen25
+        if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen25-coder-7b' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/llama.cpp/Qwen_Qwen2.5-Coder-7B-Instruct-GGUF_qwen2.5-coder-7b-instruct-q4_k_m.gguf
+          key: gguf-qwen25-coder-7b-v1
+          lookup-only: true
+
+      - name: Download Qwen2.5-Coder-7B
+        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'qwen25-coder-7b') && steps.check-qwen25.outputs.cache-hit != 'true' }}
+        run: |
+          mkdir -p "$HOME/.cache/llama.cpp"
+          HF_HOST="huggingface.co"
+          wget -q --show-progress -O "$HOME/.cache/llama.cpp/Qwen_Qwen2.5-Coder-7B-Instruct-GGUF_qwen2.5-coder-7b-instruct-q4_k_m.gguf" \
+            "https://${HF_HOST}/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+
+      - name: Save Qwen2.5-Coder-7B cache
+        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'qwen25-coder-7b') && steps.check-qwen25.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/llama.cpp/Qwen_Qwen2.5-Coder-7B-Instruct-GGUF_qwen2.5-coder-7b-instruct-q4_k_m.gguf
+          key: gguf-qwen25-coder-7b-v1
+
+      - name: Free disk space after Qwen2.5-Coder-7B
+        if: ${{ inputs.model_choice == 'all' }}
+        run: rm -rf "$HOME/.cache/llama.cpp"
+
+      - name: Check cache for Gemma-4-E4B
+        id: check-gemma4
+        if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'gemma-4-e4b' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/llama.cpp/unsloth_gemma-4-E4B-it-GGUF_gemma-4-E4B-it-UD-Q4_K_XL.gguf
+          key: gguf-gemma-4-e4b-v1
+          lookup-only: true
+
+      - name: Download Gemma-4-E4B
+        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'gemma-4-e4b') && steps.check-gemma4.outputs.cache-hit != 'true' }}
+        run: |
+          mkdir -p "$HOME/.cache/llama.cpp"
+          HF_HOST="huggingface.co"
+          wget -q --show-progress -O "$HOME/.cache/llama.cpp/unsloth_gemma-4-E4B-it-GGUF_gemma-4-E4B-it-UD-Q4_K_XL.gguf" \
+            "https://${HF_HOST}/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+
+      - name: Save Gemma-4-E4B cache
+        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'gemma-4-e4b') && steps.check-gemma4.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/llama.cpp/unsloth_gemma-4-E4B-it-GGUF_gemma-4-E4B-it-UD-Q4_K_XL.gguf
+          key: gguf-gemma-4-e4b-v1
+
+      - name: Free disk space after Gemma-4-E4B
+        if: ${{ inputs.model_choice == 'all' }}
+        run: rm -rf "$HOME/.cache/llama.cpp"
+
+      - name: Check cache for Qwen3-8B
+        id: check-qwen3
+        if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-8b' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/llama.cpp/Qwen_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf
+          key: gguf-qwen3-8b-v1
+          lookup-only: true
+
+      - name: Download Qwen3-8B
+        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-8b') && steps.check-qwen3.outputs.cache-hit != 'true' }}
+        run: |
+          mkdir -p "$HOME/.cache/llama.cpp"
+          HF_HOST="huggingface.co"
+          wget -q --show-progress -O "$HOME/.cache/llama.cpp/Qwen_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf" \
+            "https://${HF_HOST}/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"
+
+      - name: Save Qwen3-8B cache
+        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-8b') && steps.check-qwen3.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/llama.cpp/Qwen_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf
+          key: gguf-qwen3-8b-v1
+
+      - name: Free disk space after Qwen3-8B
+        if: ${{ inputs.model_choice == 'all' }}
+        run: rm -rf "$HOME/.cache/llama.cpp"
   cmake-agent-eval:
     needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix: \${{ fromJson(needs.prepare.outputs.matrix) }}
 
     env:
-      MODEL_REPO: ${{ matrix.MODEL_REPO }}
-      MODEL_FILE: ${{ matrix.MODEL_FILE }}
+      MODEL_REPO: \${{ matrix.MODEL_REPO }}
+      MODEL_FILE: \${{ matrix.MODEL_FILE }}
       OMP_NUM_THREADS: 4
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Restore llama-agent binary
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.local/bin
+          key: llama-agent-bin-b11604-v1
+
+      - name: Restore model GGUF (\${{ matrix.id }})
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/llama.cpp
+          key: gguf-\${{ matrix.id }}-v1
+
+      - name: Configure runtime paths
+        run: |
+          echo "HOME/.local/bin" >> "GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=\$HOME/.local/bin:\({LD_LIBRARY_PATH}" >> "\)GITHUB_ENV"
+          "\$HOME/.local/bin/llama-agent" --version
 
       - name: Ensure CMake & benchmark ignore rules in .gitignore
         run: |
@@ -86,45 +211,26 @@ jobs:
 
           # Local Agent & Benchmark Outputs
           .llama-agent/
+          agent-output-*.log
           report-*.md
           patch-*.diff
+          output-*.html
           EOF
-          awk '!seen[$0]++' .gitignore > .gitignore.tmp && mv .gitignore.tmp .gitignore
+          awk '!seen[\$0]++' .gitignore > .gitignore.tmp && mv .gitignore.tmp .gitignore
 
       - name: Install CMake & C++ build tools
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++
 
-      - name: Cache llama-agent & GGUF model (${{ matrix.id }})
-        id: cache-llama
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.local/bin
-            ~/.cache/llama.cpp
-          key: llama-agent-${{ matrix.id }}-v1
-
-      - name: Install llama-agent (on cache miss)
-        if: steps.cache-llama.outputs.cache-hit != 'true'
+      - name: Run CMake multi-step agent loop (\${{ matrix.id }})
+        id: run-agent
+        continue-on-error: true
         run: |
-          mkdir -p ~/.local/bin
-          HOST="github.com"
-          REPO="gary149/llama-agent"
-          TAG="b11604"
-          FILE="llama-agent-${TAG}-bin-ubuntu-x64.tar.gz"
-          wget -O /tmp/llama-agent.tar.gz "https://${HOST}/${REPO}/releases/download/${TAG}/${FILE}"
-
-          file /tmp/llama-agent.tar.gz | grep -q "gzip compressed data"
-          tar -xzf /tmp/llama-agent.tar.gz -C ~/.local/bin --strip-components=1
-          chmod +x ~/.local/bin/llama-agent
-          ~/.local/bin/llama-agent --version
-
-      - name: Run CMake multi-step agent loop (${{ matrix.id }})
-        run: |
-          "$HOME/.local/bin/llama-agent" \
-            --hf-repo "$MODEL_REPO" \
-            --hf-file "$MODEL_FILE" \
+          set -o pipefail
+          "\$HOME/.local/bin/llama-agent" \
+            --hf-repo "\$MODEL_REPO" \
+            --hf-file "\$MODEL_FILE" \
             --threads 4 \
             --ctx-size 12288 \
             --max-turns 12 \
@@ -132,51 +238,96 @@ jobs:
             1. Implement a new C++ module (or feature requested in the issue/spec) and register its source files cleanly in CMakeLists.txt.
             2. Add unit tests covering normal and edge cases and wire them into CTest.
             3. Configure and build the project using: cmake -B build -G Ninja && cmake --build build
-            4. Run ctest --test-dir build --output-on-failure and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass."
+            4. Run ctest --test-dir build --output-on-failure and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass." \
+            2>&1 | tee "agent-output-\${{ matrix.id }}.log"
 
-      - name: Inspect generated & modified files (${{ matrix.id }})
+      - name: Inspect generated files & upload to Gist (\${{ matrix.id }})
         if: always()
+        env:
+          GIST_TOKEN: \${{ secrets.GIST_TOKEN }}
         run: |
-          echo "=== GIT STATUS ==="
-          git status --short
-
-          echo "=== DIFF STAT ==="
-          git diff --stat
-
           {
-            echo "## Model Evaluation: \`${{ matrix.id }}\`"
-            echo "### Git Status"
+            echo "# Model Evaluation: \`\${{ matrix.id }}\`"
+            echo "- **Repository:** \`\${{ github.repository }}\`"
+            echo "- **Model:** \`\({{ matrix.MODEL_REPO }}\` (\`\){{ matrix.MODEL_FILE }}\`)"
+            echo "- **Agent Exit Outcome:** \`\${{ steps.run-agent.outcome }}\`"
+            echo ""
+            echo "## Git Status"
             echo '```text'
             git status --short || echo "(no changes)"
             echo '```'
-
-            echo "### Diff Stats"
+            echo "## Diff Stats"
             echo '```text'
             git diff --stat || echo "(no modified tracked files)"
             echo '```'
-
-            echo "### Modified Files Diff"
+            echo "## Modified Files Diff"
             echo '```diff'
             git diff
             echo '```'
-
-            echo "### Newly Generated Files"
-            UNTRACKED=$(git ls-files --others --exclude-standard)
-            if [ -z "$UNTRACKED" ]; then
+            echo "## Newly Generated Files"
+            UNTRACKED=\$(git ls-files --others --exclude-standard)
+            if [ -z "\$UNTRACKED" ]; then
               echo "_No new untracked files generated._"
             else
-              for f in $UNTRACKED; do
-                echo "#### \`$f\`"
+              for f in \$UNTRACKED; do
+                echo "### \`\$f\`"
                 echo '```cpp'
-                cat "\$f"
+                cat "$f"
                 echo ""
                 echo '```'
               done
             fi
-          } | tee "report-${{ matrix.id }}.md" >> "$GITHUB_STEP_SUMMARY"
+          } > "report-\${{ matrix.id }}.md"
 
           git add -N .
-          git diff > "patch-${{ matrix.id }}.diff"
+          git diff > "patch-\${{ matrix.id }}.diff"
+          touch "agent-output-\${{ matrix.id }}.log"
+
+          GIST_URL=""
+          if [ -n "\$GIST_TOKEN" ]; then
+            jq -n \
+              --arg desc "CMake Agent Output (\${{ matrix.id }}) - \({{ github.repository }} #\){{ github.run_number }}" \
+              --rawfile log "agent-output-\${{ matrix.id }}.log" \
+              --rawfile report "report-\${{ matrix.id }}.md" \
+              --rawfile patch "patch-\${{ matrix.id }}.diff" \
+              '{
+                description: \$desc,
+                public: false,
+                files: {
+                  ("1-agent-output-" + "\${{ matrix.id }}" + ".log"): { content: (if (log | length) > 0 then log else "(empty log)" end) },
+                  ("2-report-" + "\${{ matrix.id }}" + ".md"): { content: (if (report | length) > 0 then report else "(empty report)" end) },
+                  ("3-patch-" + "\${{ matrix.id }}" + ".diff"): { content: (if (patch | length) > 0 then patch else "(no diff generated)" end) }
+                }
+              }' > /tmp/gist-payload.json
+
+            API_HOST="://github.com"
+            RESPONSE=\$(curl -sS -X POST "https://\${API_HOST}/gists" \
+              -H "Authorization: Bearer \$GIST_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              --data-binary @/tmp/gist-payload.json)
+
+            GIST_URL=(echo "RESPONSE" | jq -r '.html_url // empty')
+            echo "Uploaded Gist: \$GIST_URL"
+          fi
+
+          {
+            echo "## Model Evaluation: \`\${{ matrix.id }}\`"
+            if [ -n "\$GIST_URL" ]; then
+              echo "**Full Report & Patch Gist:** [\(GIST_URL](\)GIST_URL)"
+            else
+              echo "_Gist upload skipped (set \`secrets.GIST_TOKEN\` to enable). Download artifacts below._"
+            fi
+            echo ""
+            echo "### Git Status"
+            echo '```text'
+            git status --short || echo "(no changes)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ steps.run-agent.outcome }}" != "success" ]; then
+            exit 1
+          fi
 
       - name: Upload model evaluation artifacts
         if: always()
@@ -184,5 +335,6 @@ jobs:
         with:
           name: cmake-eval-${{ matrix.id }}
           path: |
+            agent-output-${{ matrix.id }}.log
             report-${{ matrix.id }}.md
             patch-${{ matrix.id }}.diff

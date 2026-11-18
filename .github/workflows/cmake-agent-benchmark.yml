@@ -286,7 +286,7 @@ jobs:
             --hf-file "$MODEL_FILE" \
             --threads 4 \
             --ctx-size 12288 \
-            --max-turns 12 \
+            -n 4096 \
             -p "Inspect CMakeLists.txt and the src/ and tests/ directories.
             1. Implement a new C++ module (or feature requested in the issue/spec) and register its source files cleanly in CMakeLists.txt.
             2. Add unit tests covering normal and edge cases and wire them into CTest.

@@ -13,11 +13,11 @@ on:
           - gemma-4-e4b
           - qwen3-8b
       custom_prompt:
-        description: 'Custom task prompt (leave blank for default CMake benchmark prompt)'
+        description: 'Custom prompt (blank = default). Escapes: \n newline, \t tab, \\n literal \n; $VARS stay literal. Example: 1. Add greet() printing "Hi\\n"\n2. Link in ${PROJECT_NAME}'
         required: false
         default: ''
         type: string
-        
+
 permissions:
   contents: read
   actions: write
@@ -288,13 +288,27 @@ jobs:
         run: |
           set -o pipefail
 
-          DEFAULT_PROMPT="Inspect CMakeLists.txt and the src/ and tests/ directories.
+          DEFAULT_PROMPT=$(cat << 'EOF' | sed 's/^          //'
+          Inspect CMakeLists.txt and the src/ and tests/ directories.
           1. Implement a new C++ module (or feature requested in the issue/spec) and register its source files cleanly in CMakeLists.txt.
           2. Add unit tests covering normal and edge cases and wire them into CTest.
           3. Configure and build the project using: cmake -B build -G Ninja && cmake --build build
-          4. Run ctest --test-dir build --output-on-failure and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass."
+          4. Run ctest --test-dir build --output-on-failure and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass.
+          EOF
+          )
 
-          FINAL_PROMPT="${USER_PROMPT:-$DEFAULT_PROMPT}"
+          DECODED_USER_PROMPT="$(python3 -c '
+          import codecs, os, sys
+          raw = os.environ.get("USER_PROMPT", "")
+          try:
+              decoded = codecs.escape_decode(raw.encode("utf-8")).decode("utf-8")
+          except Exception:
+              decoded = raw
+          sys.stdout.write(decoded)
+          ')"
+
+          TRIMMED_USER_PROMPT="$(printf '%s' "$DECODED_USER_PROMPT" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          FINAL_PROMPT="${TRIMMED_USER_PROMPT:-$DEFAULT_PROMPT}"
           printf '%s\n' "$FINAL_PROMPT" > /tmp/final-prompt.txt
 
           timeout --signal=TERM --kill-after=30s 45m \

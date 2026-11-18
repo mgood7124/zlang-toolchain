@@ -109,9 +109,16 @@ jobs:
         if: steps.cache-llama.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.local/bin
-          curl -fsSL https://github.com -o /tmp/llama.tar.gz
-          tar -xzf /tmp/llama.tar.gz -C ~/.local/bin --strip-components=1
-          chmod +x ~/.local/bin/llama-agent || true
+          HOST="github.com"
+          REPO="gary149/llama-agent"
+          TAG="b11604"
+          FILE="llama-agent-${TAG}-bin-ubuntu-x64.tar.gz"
+          wget -O /tmp/llama-agent.tar.gz "https://${HOST}/${REPO}/releases/download/${TAG}/${FILE}"
+
+          file /tmp/llama-agent.tar.gz | grep -q "gzip compressed data"
+          tar -xzf /tmp/llama-agent.tar.gz -C ~/.local/bin --strip-components=1
+          chmod +x ~/.local/bin/llama-agent
+          ~/.local/bin/llama-agent --version
 
       - name: Run CMake multi-step agent loop (${{ matrix.id }})
         env:

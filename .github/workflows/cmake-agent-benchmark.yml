@@ -12,7 +12,12 @@ on:
           - qwen25-coder-7b
           - gemma-4-e4b
           - qwen3-8b
-
+      custom_prompt:
+        description: 'Custom task prompt (leave blank for default CMake benchmark prompt)'
+        required: false
+        default: ''
+        type: string
+        
 permissions:
   contents: read
   actions: write
@@ -278,20 +283,28 @@ jobs:
       - name: Run CMake multi-step agent loop (${{ matrix.id }})
         id: run-agent
         continue-on-error: true
+        env:
+          USER_PROMPT: ${{ inputs.custom_prompt }}
         run: |
           set -o pipefail
+
+          DEFAULT_PROMPT="Inspect CMakeLists.txt and the src/ and tests/ directories.
+          1. Implement a new C++ module (or feature requested in the issue/spec) and register its source files cleanly in CMakeLists.txt.
+          2. Add unit tests covering normal and edge cases and wire them into CTest.
+          3. Configure and build the project using: cmake -B build -G Ninja && cmake --build build
+          4. Run ctest --test-dir build --output-on-failure and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass."
+
+          FINAL_PROMPT="${USER_PROMPT:-$DEFAULT_PROMPT}"
+          printf '%s\n' "$FINAL_PROMPT" > /tmp/final-prompt.txt
+
           timeout --signal=TERM --kill-after=30s 45m \
             "$HOME/.local/bin/llama-agent" \
             --hf-repo "$MODEL_REPO" \
             --hf-file "$MODEL_FILE" \
             --threads 4 \
             --ctx-size 12288 \
-            -n 4096 \
-            -p "Inspect CMakeLists.txt and the src/ and tests/ directories.
-            1. Implement a new C++ module (or feature requested in the issue/spec) and register its source files cleanly in CMakeLists.txt.
-            2. Add unit tests covering normal and edge cases and wire them into CTest.
-            3. Configure and build the project using: cmake -B build -G Ninja && cmake --build build
-            4. Run ctest --test-dir build --output-on-failure and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass." \
+            -n 2048 \
+            -p "$FINAL_PROMPT" \
             2>&1 | tee "agent-output-${{ matrix.id }}.log"
 
       - name: Inspect generated files & upload to Gist (${{ matrix.id }})
@@ -305,6 +318,11 @@ jobs:
             echo "- Repository: ${{ github.repository }}"
             echo "- Model: ${{ matrix.MODEL_REPO }} (${{ matrix.MODEL_FILE }})"
             echo "- Agent Exit Outcome: ${{ steps.run-agent.outcome }}"
+            echo ""
+            echo "## Prompt Used"
+            echo "${FENCE}text"
+            cat /tmp/final-prompt.txt 2>/dev/null || echo "(default prompt)"
+            echo "${FENCE}"
             echo ""
             echo "## Git Status"
             echo "${FENCE}text"

@@ -28,7 +28,7 @@ jobs:
       LLAMA_TAG: b11535
       LLAMA_AGENT_TAG: b11604
       MODEL_REPO: Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
-      MODEL_FILE: qwen2.5-coder-7b-instruct-q8_0.gguf
+      MODEL_FILE: qwen2.5-coder-7b-instruct-q4_0.gguf
 
     permissions:
       contents: write

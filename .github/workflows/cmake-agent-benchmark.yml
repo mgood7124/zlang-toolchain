@@ -1,0 +1,174 @@
+name: CMake Local Agent Benchmark
+on:
+  workflow_dispatch:
+    inputs:
+      model_choice:
+        description: 'Which model to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - qwen25-coder-7b
+          - gemma-4-e4b
+          - qwen3-8b
+
+jobs:
+  cmake-agent-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: qwen25-coder-7b
+            MODEL_REPO: Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
+            MODEL_FILE: qwen2.5-coder-7b-instruct-q4_k_m.gguf
+          - id: gemma-4-e4b
+            MODEL_REPO: unsloth/gemma-4-E4B-it-GGUF
+            MODEL_FILE: gemma-4-E4B-it-UD-Q4_K_XL.gguf
+          - id: qwen3-8b
+            MODEL_REPO: Qwen/Qwen3-8B-GGUF
+            MODEL_FILE: Qwen3-8B-Q4_K_M.gguf
+
+    if: ${{ github.event.inputs.model_choice == 'all' || github.event.inputs.model_choice == matrix.id }}
+
+    env:
+      MODEL_REPO: ${{ matrix.MODEL_REPO }}
+      MODEL_FILE: ${{ matrix.MODEL_FILE }}
+      OMP_NUM_THREADS: 4
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure CMake & benchmark ignore rules in .gitignore
+        run: |
+          touch .gitignore
+          cat << 'EOF' >> .gitignore
+
+          # CMake & C++ Build Artifacts
+          build/
+          cmake-build-*/
+          CMakeFiles/
+          CMakeCache.txt
+          cmake_install.cmake
+          CTestTestfile.cmake
+          Testing/
+          Makefile
+          *.ninja
+          .ninja_deps
+          .ninja_log
+          compile_commands.json
+
+          # Compiled Objects & Binaries
+          *.o
+          *.obj
+          *.a
+          *.lib
+          *.so
+          *.dylib
+          *.dll
+          *.exe
+          *.out
+
+          # Local Agent & Benchmark Outputs
+          .llama-agent/
+          report-*.md
+          patch-*.diff
+          EOF
+          # Deduplicate lines while preserving order
+          awk '!seen[$0]++' .gitignore > .gitignore.tmp && mv .gitignore.tmp .gitignore
+
+      - name: Install CMake & C++ build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+
+      - name: Cache llama-agent & GGUF model (${{ matrix.id }})
+        id: cache-llama
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/bin
+            ~/.cache/llama.cpp
+          key: llama-agent-${{ matrix.id }}-v1
+
+      - name: Install llama-agent (on cache miss)
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.local/bin
+          curl -fsSL https://github.com -o /tmp/llama.tar.gz
+          tar -xzf /tmp/llama.tar.gz -C ~/.local/bin --strip-components=1
+          chmod +x ~/.local/bin/llama-agent || true
+
+      - name: Run CMake multi-step agent loop (${{ matrix.id }})
+        env:
+          PATH: ${{ env.PATH }}:${{ runner.home }}/.local/bin
+        run: |
+          llama-agent \
+            --hf-repo "$MODEL_REPO" \
+            --hf-file "$MODEL_FILE" \
+            --threads 4 \
+            --ctx-size 12288 \
+            --max-turns 12 \
+            -p "Inspect CMakeLists.txt and the src/ and tests/ directories.
+            1. Implement a new C++ module (or feature requested in the issue/spec) and register its source files cleanly in CMakeLists.txt.
+            2. Add unit tests covering normal and edge cases and wire them into CTest.
+            3. Configure and build the project using: cmake -B build -G Ninja && cmake --build build
+            4. Run ctest --test-dir build --output-on-failure and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass."
+
+      - name: Inspect generated & modified files (${{ matrix.id }})
+        if: always()
+        run: |
+          echo "=== GIT STATUS ==="
+          git status --short
+
+          echo "=== DIFF STAT ==="
+          git diff --stat
+
+          # Write full report to both a file artifact and the GitHub Actions Job Summary UI
+          {
+            echo "## Model Evaluation: \`${{ matrix.id }}\`"
+            echo "### Git Status"
+            echo '```text'
+            git status --short || echo "(no changes)"
+            echo '```'
+
+            echo "### Diff Stats"
+            echo '```text'
+            git diff --stat || echo "(no modified tracked files)"
+            echo '```'
+
+            echo "### Modified Files Diff"
+            echo '```diff'
+            git diff
+            echo '```'
+
+            echo "### Newly Generated Files"
+            UNTRACKED=$(git ls-files --others --exclude-standard)
+            if [ -z "$UNTRACKED" ]; then
+              echo "_No new untracked files generated._"
+            else
+              for f in $UNTRACKED; do
+                echo "#### \`$f\`"
+                echo '```cpp'
+                cat "\$f"
+                echo ""
+                echo '```'
+              done
+            fi
+          } | tee "report-${{ matrix.id }}.md" >> "$GITHUB_STEP_SUMMARY"
+
+          # Export raw unified patch (including newly added files via git add -N)
+          git add -N .
+          git diff > "patch-${{ matrix.id }}.diff"
+
+      - name: Upload model evaluation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-eval-${{ matrix.id }}
+          path: |
+            report-${{ matrix.id }}.md
+            patch-${{ matrix.id }}.diff

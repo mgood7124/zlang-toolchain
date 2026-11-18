@@ -30,6 +30,9 @@ jobs:
       MODEL_REPO: Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
       MODEL_FILE: qwen2.5-coder-7b-instruct-q8_0.gguf
 
+    permissions:
+      contents: write
+      
     steps:
       - uses: actions/checkout@v4
 

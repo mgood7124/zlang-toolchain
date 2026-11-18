@@ -299,7 +299,7 @@ jobs:
         env:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: |
-          FENCE='```'
+          FENCE=$(printf '\x60\x60\x60')
           {
             echo "# Model Evaluation: ${{ matrix.id }}"
             echo "- Repository: ${{ github.repository }}"
@@ -316,7 +316,7 @@ jobs:
             echo "${FENCE}"
             echo "## Modified Files Diff"
             echo "${FENCE}diff"
-            git diff
+            git diff || true
             echo "${FENCE}"
             echo "## Newly Generated Files"
             UNTRACKED=$(git ls-files --others --exclude-standard)
@@ -326,15 +326,15 @@ jobs:
               for f in $UNTRACKED; do
                 echo "### $f"
                 echo "${FENCE}cpp"
-                cat "$f"
+                cat "$f" || true
                 echo ""
                 echo "${FENCE}"
               done
             fi
           } > "report-${{ matrix.id }}.md"
 
-          git add -N .
-          git diff > "patch-${{ matrix.id }}.diff"
+          git add -N . || true
+          git diff > "patch-${{ matrix.id }}.diff" || true
           touch "agent-output-${{ matrix.id }}.log"
 
           GIST_URL=""
@@ -358,9 +358,9 @@ jobs:
               -H "Authorization: Bearer $GIST_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              --data-binary @/tmp/gist-payload.json)
+              --data-binary @/tmp/gist-payload.json || true)
 
-            GIST_URL=$(echo "$RESPONSE" | jq -r '.html_url // empty')
+            GIST_URL=$(echo "$RESPONSE" | jq -r '.html_url // empty' || true)
             echo "Uploaded Gist: $GIST_URL"
           fi
 
@@ -369,7 +369,7 @@ jobs:
             if [ -n "$GIST_URL" ]; then
               echo "**Full Report & Patch Gist:** [$GIST_URL]($GIST_URL)"
             else
-              echo "_Gist upload skipped (set secrets.GIST_TOKEN to enable). Download artifacts below._"
+              echo "_Gist upload skipped or failed (check secrets.GIST_TOKEN). Download artifacts below._"
             fi
             echo ""
             echo "### Git Status"
@@ -377,10 +377,6 @@ jobs:
             git status --short || echo "(no changes)"
             echo "${FENCE}"
           } >> "$GITHUB_STEP_SUMMARY"
-
-          if [ "${{ steps.run-agent.outcome }}" != "success" ]; then
-            exit 1
-          fi
 
       - name: Upload model evaluation artifacts
         if: always()
@@ -391,3 +387,9 @@ jobs:
             agent-output-${{ matrix.id }}.log
             report-${{ matrix.id }}.md
             patch-${{ matrix.id }}.diff
+
+      - name: Fail job if agent run failed
+        if: steps.run-agent.outcome != 'success'
+        run: |
+          echo "llama-agent exited with outcome: ${{ steps.run-agent.outcome }}"
+          exit 1

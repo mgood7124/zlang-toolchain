@@ -14,29 +14,11 @@ on:
           - qwen3-8b
 
 jobs:
-  prepare:
+  # Job 1: Cache llama-agent binary in parallel
+  prep-binary:
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    timeout-minutes: 15
     steps:
-      - name: Build dynamic model matrix
-        id: set-matrix
-        run: |
-          CHOICE="${{ inputs.model_choice }}"
-          FULL_MATRIX='[
-            {"id":"qwen25-coder-7b","MODEL_REPO":"Qwen/Qwen2.5-Coder-7B-Instruct-GGUF","MODEL_FILE":"qwen2.5-coder-7b-instruct-q4_k_m.gguf"},
-            {"id":"gemma-4-e4b","MODEL_REPO":"unsloth/gemma-4-E4B-it-GGUF","MODEL_FILE":"gemma-4-E4B-it-UD-Q4_K_XL.gguf"},
-            {"id":"qwen3-8b","MODEL_REPO":"Qwen/Qwen3-8B-GGUF","MODEL_FILE":"Qwen3-8B-Q4_K_M.gguf"}
-          ]'
-
-          if [ "$CHOICE" = "all" ]; then
-            SELECTED=$(echo "$FULL_MATRIX" | jq -c '.')
-          else
-            SELECTED=$(echo "$FULL_MATRIX" | jq -c --arg id "$CHOICE" '[.[] | select(.id == $id)]')
-          fi
-
-          echo "matrix={\"include\":$SELECTED}" >> "$GITHUB_OUTPUT"
-
       - name: Cache llama-agent binary
         uses: actions/cache@v4
         with:
@@ -57,97 +39,119 @@ jobs:
             tar -xzf /tmp/llama-agent.tar.gz -C /tmp/llama-extract
             find /tmp/llama-extract -type f \( -name "llama-agent" -o -name "*.so*" \) -exec cp -P {} "$HOME/.local/bin/" \;
             chmod +x "$HOME/.local/bin/llama-agent"
-            rm -rf /tmp/llama-agent.tar.gz /tmp/llama-extract
           fi
           "$HOME/.local/bin/llama-agent" --version
 
-      - name: Check cache for Qwen2.5-Coder-7B
-        id: check-qwen25
-        if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen25-coder-7b' }}
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/llama.cpp/Qwen_Qwen2.5-Coder-7B-Instruct-GGUF_qwen2.5-coder-7b-instruct-q4_k_m.gguf
-          key: gguf-qwen25-coder-7b-v1
-          lookup-only: true
-
-      - name: Download Qwen2.5-Coder-7B
-        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'qwen25-coder-7b') && steps.check-qwen25.outputs.cache-hit != 'true' }}
-        run: |
-          mkdir -p "$HOME/.cache/llama.cpp"
-          HF_HOST="huggingface.co"
-          wget -q --show-progress -O "$HOME/.cache/llama.cpp/Qwen_Qwen2.5-Coder-7B-Instruct-GGUF_qwen2.5-coder-7b-instruct-q4_k_m.gguf" \
-            "https://${HF_HOST}/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
-
-      - name: Save Qwen2.5-Coder-7B cache
-        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'qwen25-coder-7b') && steps.check-qwen25.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+  # Job 2: Cache Qwen2.5-Coder-7B in parallel
+  prep-qwen25-coder-7b:
+    if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen25-coder-7b' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Cache Qwen2.5-Coder-7B model
+        uses: actions/cache@v4
         with:
           path: ~/.cache/llama.cpp/Qwen_Qwen2.5-Coder-7B-Instruct-GGUF_qwen2.5-coder-7b-instruct-q4_k_m.gguf
           key: gguf-qwen25-coder-7b-v1
 
-      - name: Free disk space after Qwen2.5-Coder-7B
-        if: ${{ inputs.model_choice == 'all' }}
-        run: rm -rf "$HOME/.cache/llama.cpp"
-
-      - name: Check cache for Gemma-4-E4B
-        id: check-gemma4
-        if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'gemma-4-e4b' }}
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/llama.cpp/unsloth_gemma-4-E4B-it-GGUF_gemma-4-E4B-it-UD-Q4_K_XL.gguf
-          key: gguf-gemma-4-e4b-v1
-          lookup-only: true
-
-      - name: Download Gemma-4-E4B
-        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'gemma-4-e4b') && steps.check-gemma4.outputs.cache-hit != 'true' }}
+      - name: Download Qwen2.5-Coder-7B (if missing)
         run: |
-          mkdir -p "$HOME/.cache/llama.cpp"
-          HF_HOST="huggingface.co"
-          wget -q --show-progress -O "$HOME/.cache/llama.cpp/unsloth_gemma-4-E4B-it-GGUF_gemma-4-E4B-it-UD-Q4_K_XL.gguf" \
-            "https://${HF_HOST}/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+          TARGET="$HOME/.cache/llama.cpp/Qwen_Qwen2.5-Coder-7B-Instruct-GGUF_qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+          if [ ! -f "$TARGET" ]; then
+            mkdir -p "$HOME/.cache/llama.cpp"
+            HF_HOST="huggingface.co"
+            wget -q --show-progress -O "$TARGET" \
+              "https://${HF_HOST}/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+          fi
 
-      - name: Save Gemma-4-E4B cache
-        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'gemma-4-e4b') && steps.check-gemma4.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+  # Job 3: Cache Gemma-4-E4B in parallel
+  prep-gemma-4-e4b:
+    if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'gemma-4-e4b' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Cache Gemma-4-E4B model
+        uses: actions/cache@v4
         with:
           path: ~/.cache/llama.cpp/unsloth_gemma-4-E4B-it-GGUF_gemma-4-E4B-it-UD-Q4_K_XL.gguf
           key: gguf-gemma-4-e4b-v1
 
-      - name: Free disk space after Gemma-4-E4B
-        if: ${{ inputs.model_choice == 'all' }}
-        run: rm -rf "$HOME/.cache/llama.cpp"
-
-      - name: Check cache for Qwen3-8B
-        id: check-qwen3
-        if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-8b' }}
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.cache/llama.cpp/Qwen_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf
-          key: gguf-qwen3-8b-v1
-          lookup-only: true
-
-      - name: Download Qwen3-8B
-        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-8b') && steps.check-qwen3.outputs.cache-hit != 'true' }}
+      - name: Download Gemma-4-E4B (if missing)
         run: |
-          mkdir -p "$HOME/.cache/llama.cpp"
-          HF_HOST="huggingface.co"
-          wget -q --show-progress -O "$HOME/.cache/llama.cpp/Qwen_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf" \
-            "https://${HF_HOST}/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"
+          TARGET="$HOME/.cache/llama.cpp/unsloth_gemma-4-E4B-it-GGUF_gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+          if [ ! -f "$TARGET" ]; then
+            mkdir -p "$HOME/.cache/llama.cpp"
+            HF_HOST="huggingface.co"
+            wget -q --show-progress -O "$TARGET" \
+              "https://${HF_HOST}/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
+          fi
 
-      - name: Save Qwen3-8B cache
-        if: ${{ (inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-8b') && steps.check-qwen3.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
+  # Job 4: Cache Qwen3-8B in parallel
+  prep-qwen3-8b:
+    if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-8b' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Cache Qwen3-8B model
+        uses: actions/cache@v4
         with:
           path: ~/.cache/llama.cpp/Qwen_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf
           key: gguf-qwen3-8b-v1
 
-      - name: Free disk space after Qwen3-8B
-        if: ${{ inputs.model_choice == 'all' }}
-        run: rm -rf "$HOME/.cache/llama.cpp"
+      - name: Download Qwen3-8B (if missing)
+        run: |
+          TARGET="$HOME/.cache/llama.cpp/Qwen_Qwen3-8B-GGUF_Qwen3-8B-Q4_K_M.gguf"
+          if [ ! -f "$TARGET" ]; then
+            mkdir -p "$HOME/.cache/llama.cpp"
+            HF_HOST="huggingface.co"
+            wget -q --show-progress -O "$TARGET" \
+              "https://${HF_HOST}/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf"
+          fi
+
+  # Job 5: Gate & build matrix once all parallel prep jobs finish
+  prepare:
+    if: always()
+    needs: [prep-binary, prep-qwen25-coder-7b, prep-gemma-4-e4b, prep-qwen3-8b]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Verify required prep jobs succeeded
+        run: |
+          if [ "${{ needs.prep-binary.result }}" != "success" ]; then
+            echo "prep-binary failed"
+            exit 1
+          fi
+          for res in "${{ needs.prep-qwen25-coder-7b.result }}" "${{ needs.prep-gemma-4-e4b.result }}" "${{ needs.prep-qwen3-8b.result }}"; do
+            if [ "$res" = "failure" ] || [ "$res" = "cancelled" ]; then
+              echo "One or more model prep jobs failed"
+              exit 1
+            fi
+          done
+
+      - name: Build dynamic model matrix
+        id: set-matrix
+        run: |
+          CHOICE="${{ inputs.model_choice }}"
+          FULL_MATRIX='[
+            {"id":"qwen25-coder-7b","MODEL_REPO":"Qwen/Qwen2.5-Coder-7B-Instruct-GGUF","MODEL_FILE":"qwen2.5-coder-7b-instruct-q4_k_m.gguf"},
+            {"id":"gemma-4-e4b","MODEL_REPO":"unsloth/gemma-4-E4B-it-GGUF","MODEL_FILE":"gemma-4-E4B-it-UD-Q4_K_XL.gguf"},
+            {"id":"qwen3-8b","MODEL_REPO":"Qwen/Qwen3-8B-GGUF","MODEL_FILE":"Qwen3-8B-Q4_K_M.gguf"}
+          ]'
+
+          if [ "$CHOICE" = "all" ]; then
+            SELECTED=$(echo "$FULL_MATRIX" | jq -c '.')
+          else
+            SELECTED=$(echo "$FULL_MATRIX" | jq -c --arg id "$CHOICE" '[.[] | select(.id == $id)]')
+          fi
+
+          echo "matrix={\"include\":$SELECTED}" >> "$GITHUB_OUTPUT"
+
   cmake-agent-eval:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
@@ -228,7 +232,8 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          "$HOME/.local/bin/llama-agent" \
+          timeout --signal=TERM --kill-after=30s 45m \
+            "$HOME/.local/bin/llama-agent" \
             --hf-repo "$MODEL_REPO" \
             --hf-file "$MODEL_FILE" \
             --threads 4 \

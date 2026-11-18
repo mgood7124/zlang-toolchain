@@ -388,8 +388,58 @@ jobs:
             report-${{ matrix.id }}.md
             patch-${{ matrix.id }}.diff
 
-      - name: Fail job if agent run failed
-        if: steps.run-agent.outcome != 'success'
+      - name: 1. Verify llama-agent execution (${{ matrix.id }})
+        if: always()
         run: |
-          echo "llama-agent exited with outcome: ${{ steps.run-agent.outcome }}"
-          exit 1
+          OUTCOME="${{ steps.run-agent.outcome }}"
+          LOG_FILE="agent-output-${{ matrix.id }}.log"
+          STATUS="PASSED"
+          REASON="llama-agent exited cleanly with valid output."
+
+          if [ "$OUTCOME" != "success" ]; then
+            STATUS="FAILED"
+            REASON="llama-agent exited with outcome '$OUTCOME' (non-zero exit code or 45m timeout)."
+          elif [ ! -s "$LOG_FILE" ]; then
+            STATUS="FAILED"
+            REASON="agent log file is empty."
+          elif grep -qiE "^(error:|fatal:|segmentation fault|out of memory)" "$LOG_FILE"; then
+            STATUS="FAILED"
+            REASON="fatal runtime or CLI error detected in $LOG_FILE."
+          fi
+
+          echo "Agent Execution (${{ matrix.id }}): $STATUS — $REASON"
+          echo "- **1. Agent Execution:** $STATUS ($REASON)" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$STATUS" != "PASSED" ]; then
+            exit 1
+          fi
+
+      - name: 2. Verify CMake configure (${{ matrix.id }})
+        if: always()
+        run: |
+          if cmake -B build -G Ninja; then
+            echo "- **2. CMake Configure:** PASSED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **2. CMake Configure:** FAILED (Invalid CMakeLists.txt)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: 3. Verify C++ build (${{ matrix.id }})
+        if: always()
+        run: |
+          if cmake --build build; then
+            echo "- **3. C++ Build:** PASSED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **3. C++ Build:** FAILED (Compiler or linker errors)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: 4. Verify CTest unit tests (${{ matrix.id }})
+        if: always()
+        run: |
+          if ctest --test-dir build --output-on-failure; then
+            echo "- **4. CTest Suite:** PASSED" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **4. CTest Suite:** FAILED (Unit test assertions failed)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi

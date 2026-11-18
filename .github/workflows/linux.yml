@@ -28,7 +28,7 @@ jobs:
       LLAMA_TAG: b11535
       LLAMA_AGENT_TAG: b11604
       MODEL_REPO: Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
-      MODEL_FILE: qwen2.5-coder-7b-instruct-q4_0.gguf
+      MODEL_FILE: qwen2.5-coder-7b-instruct-q4_k_m.gguf
 
     permissions:
       contents: write
@@ -73,11 +73,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          echo "/models" > .gitignore
-          echo "/llama-bin" >> .gitignore
-          git add .gitignore
-          git commit -m "add .gitignore"
-          git push
+          if [[ ! -e .gitignore ]] ; then
+            echo "/models" > .gitignore
+            echo "/llama-bin" >> .gitignore
+            git add .gitignore
+            git commit -m "add .gitignore" || true
+            git push || true
+          fi
 
       - name: check git status
         run: |

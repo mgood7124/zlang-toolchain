@@ -311,13 +311,16 @@ jobs:
           FINAL_PROMPT="${TRIMMED_USER_PROMPT:-$DEFAULT_PROMPT}"
           printf '%s\n' "$FINAL_PROMPT" > /tmp/final-prompt.txt
 
-          {
-            printf '%s\n' "$FINAL_PROMPT"
-            printf '/exit\n'
-          } | timeout --signal=TERM --kill-after=30s 45m \
+          MODEL_PATH="$(find "$HOME/.cache/llama.cpp" -maxdepth 1 -type f -name "*${MODEL_FILE}" | head -n 1)"
+
+          printf '%s\n' "$FINAL_PROMPT" | timeout --signal=TERM --kill-after=30s 45m \
             "$HOME/.local/bin/llama-agent" \
-            --hf-repo "$MODEL_REPO" \
-            --hf-file "$MODEL_FILE" \
+            --backend local \
+            --yolo \
+            --no-session \
+            --max-iterations 25 \
+            --jinja \
+            -m "$MODEL_PATH" \
             --threads 4 \
             --ctx-size 12288 \
             -n 2048 \

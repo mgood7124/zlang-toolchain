@@ -312,16 +312,16 @@ jobs:
           printf '%s\n' "$FINAL_PROMPT" > /tmp/final-prompt.txt
 
           {
-            printf '%s\n' "<D>FINAL_PROMPT"
+            printf '%s\n' "$FINAL_PROMPT"
             printf '/exit\n'
           } | timeout --signal=TERM --kill-after=30s 45m \
-            "<D>HOME/.local/bin/llama-agent" \
-            --hf-repo "<D>MODEL_REPO" \
-            --hf-file "<D>MODEL_FILE" \
+            "$HOME/.local/bin/llama-agent" \
+            --hf-repo "$MODEL_REPO" \
+            --hf-file "$MODEL_FILE" \
             --threads 4 \
             --ctx-size 12288 \
             -n 2048 \
-            2>&1 | tee "agent-output-<D>{{ matrix.id }}.log"
+            2>&1 | tee "agent-output-${{ matrix.id }}.log"
 
       - name: Inspect generated files & upload to Gist (${{ matrix.id }})
         if: always()

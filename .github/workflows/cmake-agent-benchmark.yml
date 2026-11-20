@@ -162,7 +162,7 @@ jobs:
           touch "/tmp/model-seed/qwen3-8b.gguf.done"
           gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/qwen3-8b.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
 
-  # Job 5: Gate & build matrix once all parallel prep jobs finish
+  # Job 5: Gate, build matrix & write collapsible reference at top of Run Summary
   prepare:
     if: always()
     needs: [prep-binary, prep-qwen25-coder-7b, prep-gemma-4-e4b, prep-qwen3-8b]
@@ -201,6 +201,26 @@ jobs:
           fi
 
           echo "matrix={\"include\":$SELECTED}" >> "$GITHUB_OUTPUT"
+
+      - name: Write prompt syntax reference to run summary
+        run: |
+          cat << 'EOF' >> "$GITHUB_STEP_SUMMARY"
+          <details>
+          <summary><strong>Custom Prompt Escape &amp; Variable Reference</strong></summary>
+
+          | Feature | Typed in UI | Sent to Agent |
+          | :--- | :--- | :--- |
+          | **Newline & Tab** | `Line 1\n\tLine 2` | Actual newline + tab |
+          | **Literal `\n`** | `puts("Hi\\n");` | `puts("Hi\n");` |
+          | **Double Quote** | `const char *s = "\"";` | `const char *s = """;` |
+          | **Single Quote** | `char c = '\'';` | `char c = '\'';` |
+          | **Other C Escapes** | `\a \b \e \f \r \v \xHH \0NNN \\` | Decoded to raw ASCII bytes |
+          | **CMake / Shell Vars** | `target_link_libraries(app PRIVATE ${LIBS})` | Preserved literally as `${LIBS}` |
+
+          </details>
+
+          ---
+          EOF
 
   cmake-agent-eval:
     needs: prepare

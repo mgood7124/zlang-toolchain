@@ -16,12 +16,8 @@ on:
       custom_prompt:
         description: >-
           Custom prompt (blank = default) ║
-          Escapes: \n \t \r \v \f \a \b \e \xHH \0NNN \\ \" \' ║
-          (1) Line 1\n\tLine 2 ◆
-          (2) const char *s = "\""; // " ◆
-          (3) char c = '\''; // ' ◆
-          (4) puts("Hi\\n"); // literal \n ◆
-          (5) target_link_libraries(app PRIVATE ${LIBS})
+          Supports C escape sequences (https://cppreference.com): \' \" \? \\ \a \b \f \n \r \t \v \nnn \xnn (+ \e) ║
+          $VARS stay literal
         required: false
         default: ''
         type: string
@@ -226,13 +222,16 @@ jobs:
           <details>
           <summary><strong>Custom Prompt Escape &amp; Variable Reference</strong></summary>
 
+          Supports standard C escape sequences ([cppreference: Escape sequences](https://en.cppreference.com/c/language/escape)) plus `\e` (`0x1B` ESC):
+
           | Feature | Typed in UI | Sent to Agent |
           | :--- | :--- | :--- |
-          | **Newline & Tab** | `Line 1\n\tLine 2` | Actual newline + tab |
+          | **Newline & Tab** | `Line 1\n\tLine 2` | Actual newline (`0x0A`) + tab (`0x09`) |
           | **Literal `\n`** | `puts("Hi\\n");` | `puts("Hi\n");` |
           | **Double Quote** | `const char *s = "\"";` | `const char *s = """;` |
           | **Single Quote** | `char c = '\'';` | `char c = '\'';` |
-          | **Other C Escapes** | `\a \b \e \f \r \v \xHH \0NNN \\` | Decoded to raw ASCII bytes |
+          | **Simple C Escapes** | `\a \b \f \r \v \? \\` (+ `\e`) | Decoded to raw ASCII bytes |
+          | **Numeric C Escapes** | `\nnn` (octal) & `\xnn` (hex) | Decoded to raw byte values |
           | **CMake / Shell Vars** | `target_link_libraries(app PRIVATE ${LIBS})` | Preserved literally as `${LIBS}` |
 
           </details>

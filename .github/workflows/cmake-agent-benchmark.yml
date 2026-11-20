@@ -16,7 +16,7 @@ on:
       custom_prompt:
         description: >-
           Custom prompt (blank = default) ║
-          Supports C escape sequences (https://cppreference.com): \' \" \? \\ \a \b \f \n \r \t \v \nnn \xnn (+ \e) ║
+          Supports C escape sequences (https://cppreference.com); \e (used in ANSI escape codes) stays literal ║
           $VARS stay literal
         required: false
         default: ''
@@ -31,12 +31,15 @@ env:
   LLAMA_AGENT_TAG: b11604
 
 jobs:
-  # Job 0: Ensure the permanent dependency/model storage release exists
+  # Job 0: Ensure storage release exists & install huggingface_hub once if seeding is needed
   ensure-model-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    outputs:
+      needs_seed: ${{ steps.check-seed.outputs.needs_seed }}
     steps:
-      - name: Create storage release if missing
+      - name: Create storage release if missing & check if seeding needed
+        id: check-seed
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -47,6 +50,35 @@ jobs:
               --notes "Permanent storage for llama-agent binary and split GGUF models." \
               --prerelease
           fi
+
+          ASSETS=$(gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+          CHOICE="${{ inputs.model_choice }}"
+          NEEDS_SEED="false"
+
+          for id in qwen25-coder-7b gemma-4-e4b qwen3-8b; do
+            if [ "$CHOICE" = "all" ] || [ "$CHOICE" = "$id" ]; then
+              if ! echo "$ASSETS" | grep -q "^${id}\.gguf\.partaa$" || ! echo "$ASSETS" | grep -q "^${id}\.gguf\.done$"; then
+                NEEDS_SEED="true"
+              fi
+            fi
+          done
+          echo "needs_seed=$NEEDS_SEED" >> "$GITHUB_OUTPUT"
+
+      - name: Cache huggingface_hub venv (only when seeding)
+        if: steps.check-seed.outputs.needs_seed == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ~/.venv-hf
+          key: hf-cli-venv-v1
+
+      - name: Install huggingface_hub once (if missing)
+        if: steps.check-seed.outputs.needs_seed == 'true'
+        run: |
+          if [ ! -x "$HOME/.venv-hf/bin/hf" ]; then
+            python3 -m venv "$HOME/.venv-hf"
+            "$HOME/.venv-hf/bin/pip" install -q huggingface_hub
+          fi
+          "$HOME/.venv-hf/bin/hf" version
 
   # Job 1: Seed llama-agent binary once into Release + Actions Cache
   prep-binary:
@@ -90,6 +122,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - name: Restore huggingface_hub venv
+        if: needs.ensure-model-release.outputs.needs_seed == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.venv-hf
+          key: hf-cli-venv-v1
+          fail-on-cache-miss: true
+
       - name: Upload Qwen2.5-Coder-7B split parts to Release (if missing)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,9 +140,8 @@ jobs:
             exit 0
           fi
 
-          pip install -q "huggingface_hub[cli]"
           mkdir -p /tmp/model-seed
-          hf download Qwen/Qwen2.5-Coder-7B-Instruct-GGUF qwen2.5-coder-7b-instruct-q4_k_m.gguf --local-dir /tmp/model-seed
+          "$HOME/.venv-hf/bin/hf" download Qwen/Qwen2.5-Coder-7B-Instruct-GGUF qwen2.5-coder-7b-instruct-q4_k_m.gguf --local-dir /tmp/model-seed
           TARGET="/tmp/model-seed/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
 
           SIZE=$(stat -c%s "$TARGET")
@@ -111,7 +150,7 @@ jobs:
 
           split -b 1900M "$TARGET" "/tmp/model-seed/qwen25-coder-7b.gguf.part"
           rm -f "$TARGET"
-          touch "/tmp/model-seed/qwen25-coder-7b.gguf.done"
+          echo "ok" > "/tmp/model-seed/qwen25-coder-7b.gguf.done"
           gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/qwen25-coder-7b.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
 
   # Job 3: Seed Gemma-4-E4B once into GitHub Release
@@ -121,6 +160,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - name: Restore huggingface_hub venv
+        if: needs.ensure-model-release.outputs.needs_seed == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.venv-hf
+          key: hf-cli-venv-v1
+          fail-on-cache-miss: true
+
       - name: Upload Gemma-4-E4B split parts to Release (if missing)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -131,9 +178,8 @@ jobs:
             exit 0
           fi
 
-          pip install -q "huggingface_hub[cli]"
           mkdir -p /tmp/model-seed
-          hf download unsloth/gemma-4-E4B-it-GGUF gemma-4-E4B-it-UD-Q4_K_XL.gguf --local-dir /tmp/model-seed
+          "$HOME/.venv-hf/bin/hf" download unsloth/gemma-4-E4B-it-GGUF gemma-4-E4B-it-UD-Q4_K_XL.gguf --local-dir /tmp/model-seed
           TARGET="/tmp/model-seed/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
 
           SIZE=$(stat -c%s "$TARGET")
@@ -142,7 +188,7 @@ jobs:
 
           split -b 1900M "$TARGET" "/tmp/model-seed/gemma-4-e4b.gguf.part"
           rm -f "$TARGET"
-          touch "/tmp/model-seed/gemma-4-e4b.gguf.done"
+          echo "ok" > "/tmp/model-seed/gemma-4-e4b.gguf.done"
           gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/gemma-4-e4b.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
 
   # Job 4: Seed Qwen3-8B once into GitHub Release
@@ -152,6 +198,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - name: Restore huggingface_hub venv
+        if: needs.ensure-model-release.outputs.needs_seed == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.venv-hf
+          key: hf-cli-venv-v1
+          fail-on-cache-miss: true
+
       - name: Upload Qwen3-8B split parts to Release (if missing)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -162,9 +216,8 @@ jobs:
             exit 0
           fi
 
-          pip install -q "huggingface_hub[cli]"
           mkdir -p /tmp/model-seed
-          hf download Qwen/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf --local-dir /tmp/model-seed
+          "$HOME/.venv-hf/bin/hf" download Qwen/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf --local-dir /tmp/model-seed
           TARGET="/tmp/model-seed/Qwen3-8B-Q4_K_M.gguf"
 
           SIZE=$(stat -c%s "$TARGET")
@@ -173,7 +226,7 @@ jobs:
 
           split -b 1900M "$TARGET" "/tmp/model-seed/qwen3-8b.gguf.part"
           rm -f "$TARGET"
-          touch "/tmp/model-seed/qwen3-8b.gguf.done"
+          echo "ok" > "/tmp/model-seed/qwen3-8b.gguf.done"
           gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/qwen3-8b.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
 
   # Job 5: Gate, build matrix & write collapsible reference at top of Run Summary
@@ -222,7 +275,7 @@ jobs:
           <details>
           <summary><strong>Custom Prompt Escape &amp; Variable Reference</strong></summary>
 
-          Supports standard C escape sequences ([cppreference: Escape sequences](https://en.cppreference.com/c/language/escape)) plus `\e` (`0x1B` ESC):
+          Supports standard C escape sequences ([cppreference: Escape sequences](https://cppreference.com)); `\e` (used in ANSI escape codes) stays literal:
 
           | Feature | Typed in UI | Sent to Agent |
           | :--- | :--- | :--- |
@@ -230,8 +283,9 @@ jobs:
           | **Literal `\n`** | `puts("Hi\\n");` | `puts("Hi\n");` |
           | **Double Quote** | `const char *s = "\"";` | `const char *s = """;` |
           | **Single Quote** | `char c = '\'';` | `char c = '\'';` |
-          | **Simple C Escapes** | `\a \b \f \r \v \? \\` (+ `\e`) | Decoded to raw ASCII bytes |
+          | **Simple C Escapes** | `\a \b \f \r \v \? \\` | Decoded to raw ASCII bytes |
           | **Numeric C Escapes** | `\nnn` (octal) & `\xnn` (hex) | Decoded to raw byte values |
+          | **ANSI `\e` Escape** | `printf("\e[31mErr\e[0m");` | Preserved literally as `\e` |
           | **CMake / Shell Vars** | `target_link_libraries(app PRIVATE ${LIBS})` | Preserved literally as `${LIBS}` |
 
           </details>
@@ -379,11 +433,11 @@ jobs:
           import os, re, sys
           raw = os.environ.get("USER_PROMPT", "")
           escapes = {
-              "a": "\a", "b": "\b", "e": "\x1b", "f": "\f",
+              "a": "\a", "b": "\b", "f": "\f",
               "n": "\n", "r": "\r", "t": "\t", "v": "\v",
               "\\": "\\", "\"": "\"", "\x27": "\x27", "?": "?"
           }
-          pattern = re.compile(r"\\([abefnrtv\\\"\x27?]|x[0-9a-fA-F]{1,2}|[0-7]{1,3})")
+          pattern = re.compile(r"\\([abfnrtv\\\"\x27?]|x[0-9a-fA-F]{1,2}|[0-7]{1,3})")
           def repl(m):
               tok = m.group(1)
               if tok in escapes:

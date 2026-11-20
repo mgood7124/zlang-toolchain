@@ -32,53 +32,62 @@ permissions:
 
 env:
   MODEL_RELEASE_TAG: models-v1
+  LLAMA_AGENT_TAG: b11604
 
 jobs:
-  # Job 0: Ensure the permanent model-storage release exists
+  # Job 0: Ensure the permanent dependency/model storage release exists
   ensure-model-release:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Create model storage release if missing
+      - name: Create storage release if missing
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if ! gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$MODEL_RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "Benchmark GGUF Model Cache ($MODEL_RELEASE_TAG)" \
-              --notes "Automated split GGUF model storage for CMake Local Agent Benchmark." \
+              --title "Benchmark Dependencies & GGUF Cache ($MODEL_RELEASE_TAG)" \
+              --notes "Permanent storage for llama-agent binary and split GGUF models." \
               --prerelease
           fi
 
-  # Job 1: Cache llama-agent binary (~50MB stays safely in Actions cache)
+  # Job 1: Seed llama-agent binary once into Release + Actions Cache
   prep-binary:
+    needs: ensure-model-release
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Cache llama-agent binary
+      - name: Restore Actions cache for llama-agent binary
         uses: actions/cache@v5
         with:
           path: ~/.local/bin
-          key: llama-agent-bin-b11604-v2
+          key: llama-agent-bin-${{ env.LLAMA_AGENT_TAG }}-v2
 
-      - name: Install llama-agent binary (if missing)
+      - name: Seed & install llama-agent binary (if missing)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          ASSET_NAME="llama-agent-${LLAMA_AGENT_TAG}-bin-ubuntu-x64.tar.gz"
+          ASSETS=$(gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+
+          if ! echo "$ASSETS" | grep -qx "$ASSET_NAME"; then
+            REPO="gary149/llama-agent"
+            wget -q -O "/tmp/${ASSET_NAME}" "$GITHUB_SERVER_URL/${REPO}/releases/download/${LLAMA_AGENT_TAG}/${ASSET_NAME}"
+            file "/tmp/${ASSET_NAME}" | grep -q "gzip compressed data"
+            gh release upload "$MODEL_RELEASE_TAG" "/tmp/${ASSET_NAME}" --repo "$GITHUB_REPOSITORY" --clobber
+          fi
+
           if [ ! -x "$HOME/.local/bin/llama-agent" ]; then
             mkdir -p "$HOME/.local/bin" /tmp/llama-extract
-            REPO="gary149/llama-agent"
-            TAG="b11604"
-            FILE="llama-agent-${TAG}-bin-ubuntu-x64.tar.gz"
-            wget -O /tmp/llama-agent.tar.gz "$GITHUB_SERVER_URL/${REPO}/releases/download/${TAG}/${FILE}"
-
-            file /tmp/llama-agent.tar.gz | grep -q "gzip compressed data"
-            tar -xzf /tmp/llama-agent.tar.gz -C /tmp/llama-extract
+            [ -f "/tmp/${ASSET_NAME}" ] || gh release download "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET_NAME" --dir /tmp
+            tar -xzf "/tmp/${ASSET_NAME}" -C /tmp/llama-extract
             find /tmp/llama-extract -type f \( -name "llama-agent" -o -name "*.so*" \) -exec cp -P {} "$HOME/.local/bin/" \;
             chmod +x "$HOME/.local/bin/llama-agent"
           fi
           "$HOME/.local/bin/llama-agent" --version
 
-  # Job 2: Seed Qwen2.5-Coder-7B into GitHub Release (if missing)
+  # Job 2: Seed Qwen2.5-Coder-7B once into GitHub Release
   prep-qwen25-coder-7b:
     needs: ensure-model-release
     if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen25-coder-7b' }}
@@ -95,13 +104,10 @@ jobs:
             exit 0
           fi
 
+          pip install -q "huggingface_hub[cli]"
           mkdir -p /tmp/model-seed
-          TARGET="/tmp/model-seed/qwen25-coder-7b.gguf"
-
-          curl -fL --retry 5 --retry-delay 5 \
-            -A "huggingface_hub/0.29.0" \
-            -o "$TARGET" \
-            "https://huggingface.co"
+          hf download Qwen/Qwen2.5-Coder-7B-Instruct-GGUF qwen2.5-coder-7b-instruct-q4_k_m.gguf --local-dir /tmp/model-seed
+          TARGET="/tmp/model-seed/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
 
           SIZE=$(stat -c%s "$TARGET")
           echo "Downloaded size: $SIZE bytes"
@@ -112,7 +118,7 @@ jobs:
           touch "/tmp/model-seed/qwen25-coder-7b.gguf.done"
           gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/qwen25-coder-7b.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
 
-  # Job 3: Seed Gemma-4-E4B into GitHub Release (if missing)
+  # Job 3: Seed Gemma-4-E4B once into GitHub Release
   prep-gemma-4-e4b:
     needs: ensure-model-release
     if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'gemma-4-e4b' }}
@@ -129,13 +135,10 @@ jobs:
             exit 0
           fi
 
+          pip install -q "huggingface_hub[cli]"
           mkdir -p /tmp/model-seed
-          TARGET="/tmp/model-seed/gemma-4-e4b.gguf"
-
-          curl -fL --retry 5 --retry-delay 5 \
-            -A "huggingface_hub/0.29.0" \
-            -o "$TARGET" \
-            "https://huggingface.co"
+          hf download unsloth/gemma-4-E4B-it-GGUF gemma-4-E4B-it-UD-Q4_K_XL.gguf --local-dir /tmp/model-seed
+          TARGET="/tmp/model-seed/gemma-4-E4B-it-UD-Q4_K_XL.gguf"
 
           SIZE=$(stat -c%s "$TARGET")
           echo "Downloaded size: $SIZE bytes"
@@ -146,7 +149,7 @@ jobs:
           touch "/tmp/model-seed/gemma-4-e4b.gguf.done"
           gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/gemma-4-e4b.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
 
-  # Job 4: Seed Qwen3-8B into GitHub Release (if missing)
+  # Job 4: Seed Qwen3-8B once into GitHub Release
   prep-qwen3-8b:
     needs: ensure-model-release
     if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-8b' }}
@@ -163,13 +166,10 @@ jobs:
             exit 0
           fi
 
+          pip install -q "huggingface_hub[cli]"
           mkdir -p /tmp/model-seed
-          TARGET="/tmp/model-seed/qwen3-8b.gguf"
-
-          curl -fL --retry 5 --retry-delay 5 \
-            -A "huggingface_hub/0.29.0" \
-            -o "$TARGET" \
-            "https://huggingface.co"
+          hf download Qwen/Qwen3-8B-GGUF Qwen3-8B-Q4_K_M.gguf --local-dir /tmp/model-seed
+          TARGET="/tmp/model-seed/Qwen3-8B-Q4_K_M.gguf"
 
           SIZE=$(stat -c%s "$TARGET")
           echo "Downloaded size: $SIZE bytes"
@@ -258,12 +258,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Restore llama-agent binary
+      - name: Restore llama-agent binary from Actions cache
+        id: cache-bin
         uses: actions/cache/restore@v5
         with:
           path: ~/.local/bin
-          key: llama-agent-bin-b11604-v2
-          fail-on-cache-miss: true
+          key: llama-agent-bin-${{ env.LLAMA_AGENT_TAG }}-v2
+
+      - name: Fallback restore llama-agent binary from Release (if cache expired)
+        if: steps.cache-bin.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSET_NAME="llama-agent-${LLAMA_AGENT_TAG}-bin-ubuntu-x64.tar.gz"
+          mkdir -p "$HOME/.local/bin" /tmp/llama-extract
+          gh release download "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET_NAME" --dir /tmp
+          tar -xzf "/tmp/${ASSET_NAME}" -C /tmp/llama-extract
+          find /tmp/llama-extract -type f \( -name "llama-agent" -o -name "*.so*" \) -exec cp -P {} "$HOME/.local/bin/" \;
+          chmod +x "$HOME/.local/bin/llama-agent"
 
       - name: Restore model GGUF from Release (${{ matrix.id }})
         env:
@@ -331,10 +343,21 @@ jobs:
           EOF
           awk '!seen[$0]++' .gitignore > .gitignore.tmp && mv .gitignore.tmp .gitignore
 
-      - name: Install CMake & C++ build tools
+      - name: Cache apt archives (only used if build tools missing)
+        uses: actions/cache@v5
+        with:
+          path: /tmp/apt-debs
+          key: apt-cmake-ninja-gpp-v1
+
+      - name: Ensure CMake & C++ build tools are available
         run: |
+          if command -v cmake >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1; then
+            echo "cmake, ninja, and g++ already preinstalled — skipping apt-get."
+            exit 0
+          fi
+          mkdir -p /tmp/apt-debs
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build g++
+          sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" cmake ninja-build g++
 
       - name: Run CMake multi-step agent loop (${{ matrix.id }})
         id: run-agent

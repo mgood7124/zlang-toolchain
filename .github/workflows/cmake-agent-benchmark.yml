@@ -97,9 +97,15 @@ jobs:
 
           mkdir -p /tmp/model-seed
           TARGET="/tmp/model-seed/qwen25-coder-7b.gguf"
-          wget -q --show-progress --tries=5 --waitretry=5 -O "$TARGET" \
+
+          curl -fL --retry 5 --retry-delay 5 \
+            -A "huggingface_hub/0.29.0" \
+            -o "$TARGET" \
             "https://huggingface.co"
-          [ "$(stat -c%s "$TARGET")" -gt 100000000 ]
+
+          SIZE=$(stat -c%s "$TARGET")
+          echo "Downloaded size: $SIZE bytes"
+          [ "$SIZE" -gt 100000000 ]
 
           split -b 1900M "$TARGET" "/tmp/model-seed/qwen25-coder-7b.gguf.part"
           rm -f "$TARGET"
@@ -125,9 +131,15 @@ jobs:
 
           mkdir -p /tmp/model-seed
           TARGET="/tmp/model-seed/gemma-4-e4b.gguf"
-          wget -q --show-progress --tries=5 --waitretry=5 -O "$TARGET" \
+
+          curl -fL --retry 5 --retry-delay 5 \
+            -A "huggingface_hub/0.29.0" \
+            -o "$TARGET" \
             "https://huggingface.co"
-          [ "$(stat -c%s "$TARGET")" -gt 100000000 ]
+
+          SIZE=$(stat -c%s "$TARGET")
+          echo "Downloaded size: $SIZE bytes"
+          [ "$SIZE" -gt 100000000 ]
 
           split -b 1900M "$TARGET" "/tmp/model-seed/gemma-4-e4b.gguf.part"
           rm -f "$TARGET"
@@ -153,9 +165,15 @@ jobs:
 
           mkdir -p /tmp/model-seed
           TARGET="/tmp/model-seed/qwen3-8b.gguf"
-          wget -q --show-progress --tries=5 --waitretry=5 -O "$TARGET" \
+
+          curl -fL --retry 5 --retry-delay 5 \
+            -A "huggingface_hub/0.29.0" \
+            -o "$TARGET" \
             "https://huggingface.co"
-          [ "$(stat -c%s "$TARGET")" -gt 100000000 ]
+
+          SIZE=$(stat -c%s "$TARGET")
+          echo "Downloaded size: $SIZE bytes"
+          [ "$SIZE" -gt 100000000 ]
 
           split -b 1900M "$TARGET" "/tmp/model-seed/qwen3-8b.gguf.part"
           rm -f "$TARGET"

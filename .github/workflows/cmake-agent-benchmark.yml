@@ -10,7 +10,8 @@ on:
         type: choice
         options:
           - all
-          - qwen25-coder-7b
+          - qwen35-9b
+          - qwen3-4b-instruct-2507
           - gemma-4-e4b
           - qwen3-8b
       custom_prompt:
@@ -55,7 +56,7 @@ jobs:
           CHOICE="${{ inputs.model_choice }}"
           NEEDS_SEED="false"
 
-          for id in qwen25-coder-7b gemma-4-e4b qwen3-8b; do
+          for id in qwen35-9b qwen3-4b-instruct-2507 gemma-4-e4b qwen3-8b; do
             if [ "$CHOICE" = "all" ] || [ "$CHOICE" = "$id" ]; then
               if ! echo "$ASSETS" | grep -q "^${id}\.gguf\.partaa$" || ! echo "$ASSETS" | grep -q "^${id}\.gguf\.done$"; then
                 NEEDS_SEED="true"
@@ -115,10 +116,10 @@ jobs:
           fi
           "$HOME/.local/bin/llama-agent" --version
 
-  # Job 2: Seed Qwen2.5-Coder-7B once into GitHub Release
-  prep-qwen25-coder-7b:
+  # Job 2: Seed Qwen3.5-9B once into GitHub Release
+  prep-qwen35-9b:
     needs: ensure-model-release
-    if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen25-coder-7b' }}
+    if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen35-9b' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -130,30 +131,68 @@ jobs:
           key: hf-cli-venv-v1
           fail-on-cache-miss: true
 
-      - name: Upload Qwen2.5-Coder-7B split parts to Release (if missing)
+      - name: Upload Qwen3.5-9B split parts to Release (if missing)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           ASSETS=$(gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
-          if echo "$ASSETS" | grep -q "^qwen25-coder-7b\.gguf\.partaa$" && echo "$ASSETS" | grep -q "^qwen25-coder-7b\.gguf\.done$"; then
-            echo "qwen25-coder-7b already cached in release $MODEL_RELEASE_TAG."
+          if echo "$ASSETS" | grep -q "^qwen35-9b\.gguf\.partaa$" && echo "$ASSETS" | grep -q "^qwen35-9b\.gguf\.done$"; then
+            echo "qwen35-9b already cached in release $MODEL_RELEASE_TAG."
             exit 0
           fi
 
           mkdir -p /tmp/model-seed
-          "$HOME/.venv-hf/bin/hf" download Qwen/Qwen2.5-Coder-7B-Instruct-GGUF qwen2.5-coder-7b-instruct-q4_k_m.gguf --local-dir /tmp/model-seed
-          TARGET="/tmp/model-seed/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+          "$HOME/.venv-hf/bin/hf" download unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf --local-dir /tmp/model-seed
+          TARGET="/tmp/model-seed/Qwen3.5-9B-Q4_K_M.gguf"
 
           SIZE=$(stat -c%s "$TARGET")
           echo "Downloaded size: $SIZE bytes"
           [ "$SIZE" -gt 100000000 ]
 
-          split -b 1900M "$TARGET" "/tmp/model-seed/qwen25-coder-7b.gguf.part"
+          split -b 1900M "$TARGET" "/tmp/model-seed/qwen35-9b.gguf.part"
           rm -f "$TARGET"
-          echo "ok" > "/tmp/model-seed/qwen25-coder-7b.gguf.done"
-          gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/qwen25-coder-7b.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
+          echo "ok" > "/tmp/model-seed/qwen35-9b.gguf.done"
+          gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/qwen35-9b.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
 
-  # Job 3: Seed Gemma-4-E4B once into GitHub Release
+  # Job 3: Seed Qwen3-4B-Instruct-2507 once into GitHub Release
+  prep-qwen3-4b-instruct-2507:
+    needs: ensure-model-release
+    if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-4b-instruct-2507' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Restore huggingface_hub venv
+        if: needs.ensure-model-release.outputs.needs_seed == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.venv-hf
+          key: hf-cli-venv-v1
+          fail-on-cache-miss: true
+
+      - name: Upload Qwen3-4B-Instruct-2507 split parts to Release (if missing)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSETS=$(gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+          if echo "$ASSETS" | grep -q "^qwen3-4b-instruct-2507\.gguf\.partaa$" && echo "$ASSETS" | grep -q "^qwen3-4b-instruct-2507\.gguf\.done$"; then
+            echo "qwen3-4b-instruct-2507 already cached in release $MODEL_RELEASE_TAG."
+            exit 0
+          fi
+
+          mkdir -p /tmp/model-seed
+          "$HOME/.venv-hf/bin/hf" download unsloth/Qwen3-4B-Instruct-2507-GGUF Qwen3-4B-Instruct-2507-Q4_K_M.gguf --local-dir /tmp/model-seed
+          TARGET="/tmp/model-seed/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+
+          SIZE=$(stat -c%s "$TARGET")
+          echo "Downloaded size: $SIZE bytes"
+          [ "$SIZE" -gt 100000000 ]
+
+          split -b 1900M "$TARGET" "/tmp/model-seed/qwen3-4b-instruct-2507.gguf.part"
+          rm -f "$TARGET"
+          echo "ok" > "/tmp/model-seed/qwen3-4b-instruct-2507.gguf.done"
+          gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/qwen3-4b-instruct-2507.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
+
+  # Job 4: Seed Gemma-4-E4B once into GitHub Release
   prep-gemma-4-e4b:
     needs: ensure-model-release
     if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'gemma-4-e4b' }}
@@ -191,7 +230,7 @@ jobs:
           echo "ok" > "/tmp/model-seed/gemma-4-e4b.gguf.done"
           gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/gemma-4-e4b.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
 
-  # Job 4: Seed Qwen3-8B once into GitHub Release
+  # Job 5: Seed Qwen3-8B once into GitHub Release
   prep-qwen3-8b:
     needs: ensure-model-release
     if: ${{ inputs.model_choice == 'all' || inputs.model_choice == 'qwen3-8b' }}
@@ -229,10 +268,11 @@ jobs:
           echo "ok" > "/tmp/model-seed/qwen3-8b.gguf.done"
           gh release upload "$MODEL_RELEASE_TAG" /tmp/model-seed/qwen3-8b.gguf.* --repo "$GITHUB_REPOSITORY" --clobber
 
-  # Job 5: Gate, build matrix & write collapsible reference at top of Run Summary
+
+  # Job 6: Gate, build matrix & write collapsible reference at top of Run Summary
   prepare:
     if: always()
-    needs: [prep-binary, prep-qwen25-coder-7b, prep-gemma-4-e4b, prep-qwen3-8b]
+    needs: [prep-binary, prep-qwen35-9b, prep-qwen3-4b-instruct-2507, prep-gemma-4-e4b, prep-qwen3-8b]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -244,7 +284,7 @@ jobs:
             echo "prep-binary failed"
             exit 1
           fi
-          for res in "${{ needs.prep-qwen25-coder-7b.result }}" "${{ needs.prep-gemma-4-e4b.result }}" "${{ needs.prep-qwen3-8b.result }}"; do
+          for res in "${{ needs.prep-qwen35-9b.result }}" "${{ needs.prep-qwen3-4b-instruct-2507.result }}" "${{ needs.prep-gemma-4-e4b.result }}" "${{ needs.prep-qwen3-8b.result }}"; do
             if [ "$res" = "failure" ] || [ "$res" = "cancelled" ]; then
               echo "One or more model prep jobs failed"
               exit 1
@@ -256,7 +296,8 @@ jobs:
         run: |
           CHOICE="${{ inputs.model_choice }}"
           FULL_MATRIX='[
-            {"id":"qwen25-coder-7b","MODEL_REPO":"Qwen/Qwen2.5-Coder-7B-Instruct-GGUF","MODEL_FILE":"qwen2.5-coder-7b-instruct-q4_k_m.gguf"},
+            {"id":"qwen35-9b","MODEL_REPO":"unsloth/Qwen3.5-9B-GGUF","MODEL_FILE":"Qwen3.5-9B-Q4_K_M.gguf"},
+            {"id":"qwen3-4b-instruct-2507","MODEL_REPO":"unsloth/Qwen3-4B-Instruct-2507-GGUF","MODEL_FILE":"Qwen3-4B-Instruct-2507-Q4_K_M.gguf"},
             {"id":"gemma-4-e4b","MODEL_REPO":"unsloth/gemma-4-E4B-it-GGUF","MODEL_FILE":"gemma-4-E4B-it-UD-Q4_K_XL.gguf"},
             {"id":"qwen3-8b","MODEL_REPO":"Qwen/Qwen3-8B-GGUF","MODEL_FILE":"Qwen3-8B-Q4_K_M.gguf"}
           ]'

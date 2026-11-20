@@ -462,14 +462,15 @@ jobs:
           set -o pipefail
 
           DEFAULT_PROMPT=$(cat << 'EOF' | sed 's/^          //'
-          Inspect CMakeLists.txt and the src/ and tests/ directories.
-          1. Implement a new C++ module (or feature requested in the issue/spec) and register its source files cleanly in CMakeLists.txt.
-          2. Add unit tests covering normal and edge cases and wire them into CTest.
-          3. Configure and build the project using: cmake -B build -G Ninja && cmake --build build
-          4. Run ctest --test-dir build --output-on-failure and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass.
+          Inspect the repository structure using glob.
+          1. If CMakeLists.txt does not exist yet, create a clean top-level CMakeLists.txt (with enable_testing()) along with src/ and tests/ directories; otherwise update the existing CMakeLists.txt.
+          2. Implement a new C++ module (or feature requested in the issue/spec) in src/ and register its source files cleanly in CMakeLists.txt.
+          3. Add unit tests covering normal and edge cases in tests/ and wire them into CTest via add_test().
+          4. Configure and build the project using: cmake -B build -G Ninja && cmake --build build
+          5. Run ctest --test-dir build --output-on-failure --timeout 30 and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass.
+          IMPORTANT: All unit tests must be strictly non-interactive (never read from stdin/std::cin or wait for user input) and must terminate deterministically.
           EOF
           )
-
           DECODED_USER_PROMPT="$(python3 -c '
           import os, re, sys
           raw = os.environ.get("USER_PROMPT", "")
@@ -658,7 +659,7 @@ jobs:
       - name: 4. Verify CTest unit tests (${{ matrix.id }})
         if: always()
         run: |
-          if ctest --test-dir build --output-on-failure; then
+          if ctest --test-dir build --output-on-failure --timeout 30; then
             echo "- **4. CTest Suite:** PASSED" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "- **4. CTest Suite:** FAILED (Unit test assertions failed)" >> "$GITHUB_STEP_SUMMARY"

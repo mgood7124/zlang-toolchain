@@ -14,6 +14,16 @@ on:
           - qwen3-4b-instruct-2507
           - gemma-4-e4b
           - qwen3-8b
+      context_size:
+        description: 'Context window size (default = per-model matrix value)'
+        required: true
+        default: 'default'
+        type: choice
+        options:
+          - default
+          - '65535 (64K)'
+          - '32768 (32K)'
+          - '12288 (12K)'
       custom_prompt:
         description: >-
           Custom prompt (blank = default) ║
@@ -295,11 +305,13 @@ jobs:
         id: set-matrix
         run: |
           CHOICE="${{ inputs.model_choice }}"
+          CTX_RAW="${{ inputs.context_size }}"
+          CTX_OVERRIDE="${CTX_RAW%% *}"
           FULL_MATRIX='[
-            {"id":"qwen35-9b","MODEL_REPO":"unsloth/Qwen3.5-9B-GGUF","MODEL_FILE":"Qwen3.5-9B-Q4_K_M.gguf"},
-            {"id":"qwen3-4b-instruct-2507","MODEL_REPO":"unsloth/Qwen3-4B-Instruct-2507-GGUF","MODEL_FILE":"Qwen3-4B-Instruct-2507-Q4_K_M.gguf"},
-            {"id":"gemma-4-e4b","MODEL_REPO":"unsloth/gemma-4-E4B-it-GGUF","MODEL_FILE":"gemma-4-E4B-it-UD-Q4_K_XL.gguf"},
-            {"id":"qwen3-8b","MODEL_REPO":"Qwen/Qwen3-8B-GGUF","MODEL_FILE":"Qwen3-8B-Q4_K_M.gguf"}
+            {"id":"qwen35-9b","MODEL_REPO":"unsloth/Qwen3.5-9B-GGUF","MODEL_FILE":"Qwen3.5-9B-Q4_K_M.gguf","CTX_SIZE":"32768"},
+            {"id":"qwen3-4b-instruct-2507","MODEL_REPO":"unsloth/Qwen3-4B-Instruct-2507-GGUF","MODEL_FILE":"Qwen3-4B-Instruct-2507-Q4_K_M.gguf","CTX_SIZE":"65535"},
+            {"id":"gemma-4-e4b","MODEL_REPO":"unsloth/gemma-4-E4B-it-GGUF","MODEL_FILE":"gemma-4-E4B-it-UD-Q4_K_XL.gguf","CTX_SIZE":"32768"},
+            {"id":"qwen3-8b","MODEL_REPO":"Qwen/Qwen3-8B-GGUF","MODEL_FILE":"Qwen3-8B-Q4_K_M.gguf","CTX_SIZE":"32768"}
           ]'
 
           if [ "$CHOICE" = "all" ]; then
@@ -308,10 +320,59 @@ jobs:
             SELECTED=$(echo "$FULL_MATRIX" | jq -c --arg id "$CHOICE" '[.[] | select(.id == $id)]')
           fi
 
+          if [ "$CTX_OVERRIDE" != "default" ]; then
+            SELECTED=$(echo "$SELECTED" | jq -c --arg ctx "$CTX_OVERRIDE" '[.[] | .CTX_SIZE = $ctx]')
+          fi
+
           echo "matrix={\"include\":$SELECTED}" >> "$GITHUB_OUTPUT"
 
-      - name: Write prompt syntax reference to run summary
+      - name: Write prompt & syntax reference to run summary
+        env:
+          USER_PROMPT: ${{ inputs.custom_prompt }}
         run: |
+          DEFAULT_PROMPT=$(cat << 'EOF' | sed 's/^          //'
+          Inspect the repository structure using glob.
+          1. If CMakeLists.txt does not exist yet, create a clean top-level CMakeLists.txt (with enable_testing()) along with src/ and tests/ directories; otherwise update the existing CMakeLists.txt. Do NOT hardcode g++ or gcc in CMakeLists.txt—use the environment's LLVM Clang toolchain (CC=clang, CXX=clang++).
+          2. Implement a new C++ module (or feature requested in the issue/spec) in src/ and register its source files cleanly in CMakeLists.txt.
+          3. Add unit tests covering normal and edge cases in tests/ and wire them into CTest via add_test().
+          4. Configure and build the project using: cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ && cmake --build build
+          5. Run ctest --test-dir build --output-on-failure --timeout 30 and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass.
+          IMPORTANT: Always use CMake with LLVM Clang (clang/clang++), never invoke g++ directly. When inspecting files or directories, target specific paths (src/, tests/, CMakeLists.txt) and avoid printing large directories like build/ or .git/. All unit tests must be strictly non-interactive (never read from stdin/std::cin or wait for user input) and must terminate deterministically.
+          EOF
+          )
+
+          DECODED_USER_PROMPT="$(python3 -c '
+          import os, re, sys
+          raw = os.environ.get("USER_PROMPT", "")
+          escapes = {
+              "a": "\a", "b": "\b", "f": "\f",
+              "n": "\n", "r": "\r", "t": "\t", "v": "\v",
+              "\\": "\\", "\"": "\"", "\x27": "\x27", "?": "?"
+          }
+          pattern = re.compile(r"\\([abfnrtv\\\"\x27?]|x[0-9a-fA-F]{1,2}|[0-7]{1,3})")
+          def repl(m):
+              tok = m.group(1)
+              if tok in escapes:
+                  return escapes[tok]
+              if tok.startswith("x"):
+                  return chr(int(tok[1:], 16))
+              return chr(int(tok, 8))
+          sys.stdout.write(pattern.sub(repl, raw))
+          ')"
+
+          TRIMMED_USER_PROMPT="$(printf '%s' "$DECODED_USER_PROMPT" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          if [ -n "$TRIMMED_USER_PROMPT" ]; then
+            LABEL="Custom Prompt Used"
+            FINAL_PROMPT="$TRIMMED_USER_PROMPT"
+          else
+            LABEL="Default Prompt Used"
+            FINAL_PROMPT="$DEFAULT_PROMPT"
+          fi
+
+          WRAPPED_PROMPT=$(printf '%s\n' "$FINAL_PROMPT" | fold -s -w 95)
+          VISUAL_LINES=$(printf '%s\n' "$WRAPPED_PROMPT" | wc -l)
+          FENCE=$(printf '\x60\x60\x60')
+
           cat << 'EOF' >> "$GITHUB_STEP_SUMMARY"
           <details>
           <summary><strong>Custom Prompt Escape &amp; Variable Reference</strong></summary>
@@ -331,8 +392,27 @@ jobs:
 
           </details>
 
-          ---
           EOF
+
+          {
+            if [ "$VISUAL_LINES" -gt 10 ]; then
+              echo "<details>"
+              echo "<summary><strong>${LABEL}</strong> (${VISUAL_LINES} lines)</summary>"
+              echo ""
+              echo "${FENCE}text"
+              printf '%s\n' "$WRAPPED_PROMPT"
+              echo "${FENCE}"
+              echo ""
+              echo "</details>"
+            else
+              echo "**${LABEL}:**"
+              echo "${FENCE}text"
+              printf '%s\n' "$WRAPPED_PROMPT"
+              echo "${FENCE}"
+            fi
+            echo ""
+            echo "---"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   cmake-agent-eval:
     needs: prepare
@@ -345,8 +425,12 @@ jobs:
     env:
       MODEL_REPO: ${{ matrix.MODEL_REPO }}
       MODEL_FILE: ${{ matrix.MODEL_FILE }}
+      CTX_SIZE: ${{ matrix.CTX_SIZE }}
       LLAMA_CACHE: /home/runner/.cache/llama.cpp
       OMP_NUM_THREADS: 4
+      CC: clang
+      CXX: clang++
+      LDFLAGS: -fuse-ld=lld
 
     steps:
       - name: Checkout repository
@@ -441,17 +525,17 @@ jobs:
         uses: actions/cache@v5
         with:
           path: /tmp/apt-debs
-          key: apt-cmake-ninja-gpp-v1
+          key: apt-cmake-ninja-clang-v1
 
-      - name: Ensure CMake & C++ build tools are available
+      - name: Ensure CMake & LLVM/Clang build tools are available
         run: |
-          if command -v cmake >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1; then
-            echo "cmake, ninja, and g++ already preinstalled — skipping apt-get."
+          if command -v cmake >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 && command -v clang++ >/dev/null 2>&1 && command -v ld.lld >/dev/null 2>&1 && [ -x /usr/bin/time ]; then
+            echo "cmake, ninja, clang, clang++, lld, and /usr/bin/time already preinstalled — skipping apt-get."
             exit 0
           fi
           mkdir -p /tmp/apt-debs
           sudo apt-get update
-          sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" cmake ninja-build g++
+          sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" cmake ninja-build clang lld time
 
       - name: Run CMake multi-step agent loop (${{ matrix.id }})
         id: run-agent
@@ -463,14 +547,15 @@ jobs:
 
           DEFAULT_PROMPT=$(cat << 'EOF' | sed 's/^          //'
           Inspect the repository structure using glob.
-          1. If CMakeLists.txt does not exist yet, create a clean top-level CMakeLists.txt (with enable_testing()) along with src/ and tests/ directories; otherwise update the existing CMakeLists.txt.
+          1. If CMakeLists.txt does not exist yet, create a clean top-level CMakeLists.txt (with enable_testing()) along with src/ and tests/ directories; otherwise update the existing CMakeLists.txt. Do NOT hardcode g++ or gcc in CMakeLists.txt—use the environment's LLVM Clang toolchain (CC=clang, CXX=clang++).
           2. Implement a new C++ module (or feature requested in the issue/spec) in src/ and register its source files cleanly in CMakeLists.txt.
           3. Add unit tests covering normal and edge cases in tests/ and wire them into CTest via add_test().
-          4. Configure and build the project using: cmake -B build -G Ninja && cmake --build build
+          4. Configure and build the project using: cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ && cmake --build build
           5. Run ctest --test-dir build --output-on-failure --timeout 30 and fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass.
-          IMPORTANT: All unit tests must be strictly non-interactive (never read from stdin/std::cin or wait for user input) and must terminate deterministically.
+          IMPORTANT: Always use CMake with LLVM Clang (clang/clang++), never invoke g++ directly. When inspecting files or directories, target specific paths (src/, tests/, CMakeLists.txt) and avoid printing large directories like build/ or .git/. All unit tests must be strictly non-interactive (never read from stdin/std::cin or wait for user input) and must terminate deterministically.
           EOF
           )
+
           DECODED_USER_PROMPT="$(python3 -c '
           import os, re, sys
           raw = os.environ.get("USER_PROMPT", "")
@@ -494,7 +579,8 @@ jobs:
           FINAL_PROMPT="${TRIMMED_USER_PROMPT:-$DEFAULT_PROMPT}"
           printf '%s\n' "$FINAL_PROMPT" > /tmp/final-prompt.txt
 
-          printf '%s\n' "$FINAL_PROMPT" | timeout --signal=TERM --kill-after=30s 45m \
+          printf '%s\n' "$FINAL_PROMPT" | /usr/bin/time -f "%M" -o /tmp/agent-mem-kb.txt \
+            timeout --signal=TERM --kill-after=30s 45m \
             "$HOME/.local/bin/llama-agent" \
             --backend local \
             --offline \
@@ -504,7 +590,7 @@ jobs:
             --jinja \
             -m "$MODEL_PATH" \
             --threads 4 \
-            --ctx-size 12288 \
+            --ctx-size "$CTX_SIZE" \
             -n 2048 \
             2>&1 | tee "agent-output-${{ matrix.id }}.log"
 
@@ -514,10 +600,20 @@ jobs:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: |
           FENCE=$(printf '\x60\x60\x60')
+          TOTAL_RAM=$(free -m | awk '/^Mem:/ {printf "%.2f GB", $2/1024}')
+          PEAK_KB=$(tail -n 1 /tmp/agent-mem-kb.txt 2>/dev/null | tr -dc '0-9')
+          if [ -n "$PEAK_KB" ] && [ "$PEAK_KB" -gt 0 ]; then
+            PEAK_RAM=$(awk -v kb="$PEAK_KB" 'BEGIN {printf "%.2f GB (%d MB)", kb/1048576, kb/1024}')
+          else
+            PEAK_RAM="N/A"
+          fi
+
           {
             echo "# Model Evaluation: ${{ matrix.id }}"
             echo "- Repository: ${{ github.repository }}"
             echo "- Model: ${{ matrix.MODEL_REPO }} (${{ matrix.MODEL_FILE }})"
+            echo "- Context Size: $CTX_SIZE"
+            echo "- Peak Memory Usage: $PEAK_RAM / $TOTAL_RAM"
             echo "- Local Cache Path: $MODEL_PATH"
             echo "- Agent Exit Outcome: ${{ steps.run-agent.outcome }}"
             echo ""
@@ -588,10 +684,11 @@ jobs:
 
           {
             echo "## Model Evaluation: ${{ matrix.id }}"
+            echo "- **Context Size:** \`$CTX_SIZE\` | **Peak Memory:** \`$PEAK_RAM\` / \`$TOTAL_RAM\`"
             if [ -n "$GIST_URL" ]; then
-              echo "**Full Report & Patch Gist:** [$GIST_URL]($GIST_URL)"
+              echo "- **Full Report & Patch Gist:** [$GIST_URL]($GIST_URL)"
             else
-              echo "_Gist upload skipped or failed (check secrets.GIST_TOKEN). Download artifacts below._"
+              echo "- _Gist upload skipped or failed (check secrets.GIST_TOKEN). Download artifacts below._"
             fi
             echo ""
             echo "### Git Status"
@@ -639,10 +736,11 @@ jobs:
       - name: 2. Verify CMake configure (${{ matrix.id }})
         if: always()
         run: |
-          if cmake -B build -G Ninja; then
-            echo "- **2. CMake Configure:** PASSED" >> "$GITHUB_STEP_SUMMARY"
+          rm -rf build/CMakeCache.txt build/CMakeFiles
+          if cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++; then
+            echo "- **2. CMake Configure (Clang):** PASSED" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "- **2. CMake Configure:** FAILED (Invalid CMakeLists.txt)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **2. CMake Configure (Clang):** FAILED (Invalid CMakeLists.txt)" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
@@ -650,9 +748,9 @@ jobs:
         if: always()
         run: |
           if cmake --build build; then
-            echo "- **3. C++ Build:** PASSED" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **3. C++ Build (Clang):** PASSED" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "- **3. C++ Build:** FAILED (Compiler or linker errors)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **3. C++ Build (Clang):** FAILED (Compiler or linker errors)" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 

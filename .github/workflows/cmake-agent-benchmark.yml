@@ -42,7 +42,7 @@ env:
   LLAMA_AGENT_TAG: b11604
   DEFAULT_PROMPT: |
     Create a minimal, clean C++ CMake project in as few tool calls as possible:
-    1. Use a SINGLE top-level CMakeLists.txt (do NOT create nested src/CMakeLists.txt or tests/CMakeLists.txt files). Register source files directly via relative paths (src/... and tests/...) with enable_testing() and add_test(). Do NOT hardcode g++ or gcc—use LLVM Clang (CC=clang, CXX=clang++).
+    1. Use a SINGLE top-level CMakeLists.txt (do NOT create nested src/CMakeLists.txt or tests/CMakeLists.txt files). Register source files directly via relative paths (src/... and tests/...) and MUST include both enable_testing() and add_test(NAME <test_name> COMMAND <test_target>) so ctest discovers the tests. Do NOT hardcode g++ or gcc—use LLVM Clang (CC=clang, CXX=clang++).
     2. Write one header and one source file in src/, plus one non-interactive unit test file in tests/ (never read from stdin/std::cin). Note: the write tool creates parent directories automatically, so skip manual mkdir/ls checks.
     3. Configure, build, and run tests in a SINGLE bash command: cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ && cmake --build build && ctest --test-dir build --output-on-failure --timeout 30
     4. Fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass.

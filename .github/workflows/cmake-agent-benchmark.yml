@@ -40,6 +40,13 @@ permissions:
 env:
   MODEL_RELEASE_TAG: models-v1
   LLAMA_AGENT_TAG: b11604
+  DEFAULT_PROMPT: |
+    Create a minimal, clean C++ CMake project in as few tool calls as possible:
+    1. Use a SINGLE top-level CMakeLists.txt (do NOT create nested src/CMakeLists.txt or tests/CMakeLists.txt files). Register source files directly via relative paths (src/... and tests/...) with enable_testing() and add_test(). Do NOT hardcode g++ or gcc—use LLVM Clang (CC=clang, CXX=clang++).
+    2. Write one header and one source file in src/, plus one non-interactive unit test file in tests/ (never read from stdin/std::cin). Note: the write tool creates parent directories automatically, so skip manual mkdir/ls checks.
+    3. Configure, build, and run tests in a SINGLE bash command: cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ && cmake --build build && ctest --test-dir build --output-on-failure --timeout 30
+    4. Fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass.
+    IMPORTANT: Target specific paths only and never print build/ or .git/.
 
 jobs:
   # Job 0: Ensure storage release exists & install huggingface_hub once if seeding is needed
@@ -330,16 +337,6 @@ jobs:
         env:
           USER_PROMPT: ${{ inputs.custom_prompt }}
         run: |
-          DEFAULT_PROMPT=$(cat << 'EOF' | sed 's/^          //'
-          Create a minimal, clean C++ CMake project in as few tool calls as possible:
-          1. Use a SINGLE top-level CMakeLists.txt (do NOT create nested src/CMakeLists.txt or tests/CMakeLists.txt files). Register source files directly via relative paths (src/... and tests/...) with enable_testing() and add_test(). Do NOT hardcode g++ or gcc—use LLVM Clang (CC=clang, CXX=clang++).
-          2. Write one header and one source file in src/, plus one non-interactive unit test file in tests/ (never read from stdin/std::cin). Note: the write tool creates parent directories automatically, so skip manual mkdir/ls checks.
-          3. Configure, build, and run tests in a SINGLE bash command: cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ && cmake --build build && ctest --test-dir build --output-on-failure --timeout 30
-          4. Fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass.
-          IMPORTANT: Target specific paths only and never print build/ or .git/.
-          EOF
-          )
-
           DECODED_USER_PROMPT="$(python3 -c '
           import os, re, sys
           raw = os.environ.get("USER_PROMPT", "")
@@ -543,16 +540,6 @@ jobs:
           USER_PROMPT: ${{ inputs.custom_prompt }}
         run: |
           set -o pipefail
-
-          DEFAULT_PROMPT=$(cat << 'EOF' | sed 's/^          //'
-          Create a minimal, clean C++ CMake project in as few tool calls as possible:
-          1. Use a SINGLE top-level CMakeLists.txt (do NOT create nested src/CMakeLists.txt or tests/CMakeLists.txt files). Register source files directly via relative paths (src/... and tests/...) with enable_testing() and add_test(). Do NOT hardcode g++ or gcc—use LLVM Clang (CC=clang, CXX=clang++).
-          2. Write one header and one source file in src/, plus one non-interactive unit test file in tests/ (never read from stdin/std::cin). Note: the write tool creates parent directories automatically, so skip manual mkdir/ls checks.
-          3. Configure, build, and run tests in a SINGLE bash command: cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ && cmake --build build && ctest --test-dir build --output-on-failure --timeout 30
-          4. Fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass.
-          IMPORTANT: Target specific paths only and never print build/ or .git/.
-          EOF
-          )
 
           DECODED_USER_PROMPT="$(python3 -c '
           import os, re, sys

@@ -161,13 +161,14 @@ jobs:
           path: /Users/runner/.cache/macos-sdk
           key: macos-sdk-sysroot-v1
 
-      - name: Extract dereferenced MacOSX.sdk from Xcode (on cache miss)
+      - name: Extract MacOSX.sdk from Xcode (on cache miss)
         if: steps.cache-macos-sdk.outputs.cache-hit != 'true'
         run: |
           SDK_SRC="$(xcrun --show-sdk-path)"
-          echo "Extracting dereferenced MacOSX.sdk from: $SDK_SRC"
-          mkdir -p /Users/runner/.cache/macos-sdk/MacOSX.sdk
-          cp -RL "$SDK_SRC"/. /Users/runner/.cache/macos-sdk/MacOSX.sdk/
+          echo "Packaging MacOSX.sdk from: $SDK_SRC"
+          mkdir -p /Users/runner/.cache/macos-sdk
+          # Preserve relative symlinks (-a) so self-referential framework links (e.g. Ruby.framework) do not cycle
+          rsync -a "$SDK_SRC/" /Users/runner/.cache/macos-sdk/MacOSX.sdk/
           du -sh /Users/runner/.cache/macos-sdk/MacOSX.sdk
 
   # Job 1: Parallel matrix builder across all selected OSes & ABIs on 16GB Linux VMs
@@ -368,64 +369,88 @@ jobs:
           rm -rf /tmp/android-ndk.zip /tmp/ndk-extract
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
 
-      - name: Restore or seed llama-agent binary & model from Release (${{ env.MODEL_RELEASE_TAG }})
+      - name: Restore Actions cache for llama-agent binary
+        id: cache-agent-bin
+        uses: actions/cache@v5
+        with:
+          path: ~/.local/bin
+          key: llama-agent-bin-${{ env.LLAMA_AGENT_TAG }}-v2
+
+      - name: Install or seed llama-agent binary (matching benchmark workflow)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          REPO="gary149/llama-agent"
-          MODEL_ID="${{ inputs.model_choice }}"
-          ASSET_NAME="llama-agent-${LLAMA_AGENT_TAG}-bin-ubuntu-x64.tar.gz"
-          mkdir -p "$HOME/.local/bin" "$HOME/.cache/llama.cpp" /tmp/llama-extract /tmp/model-parts
+          if [ ! -x "$HOME/.local/bin/llama-agent" ]; then
+            REPO="gary149/llama-agent"
+            SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
+            API_URL="${GITHUB_API_URL:-https://github.com}"
+            ASSET_NAME="llama-agent-$LLAMA_AGENT_TAG-bin-ubuntu-x64.tar.gz"
+            mkdir -p "$HOME/.local/bin" /tmp/llama-extract
 
-          if ! gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$MODEL_RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "Cached Llama Agent & Quantized GGUF Models" \
-              --notes "Pre-cached llama-agent binary and split GGUF model weights." \
-              --prerelease
-          fi
-
-          ASSETS=$(gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
-
-          if ! echo "$ASSETS" | grep -qx "$ASSET_NAME"; then
-            DIRECT_URL="$GITHUB_SERVER_URL/${REPO}/releases/download/${LLAMA_AGENT_TAG}/${ASSET_NAME}"
-            if ! wget --server-response -O "/tmp/${ASSET_NAME}" "$DIRECT_URL" 2>&1; then
-              echo "Exact tag $LLAMA_AGENT_TAG not found on $REPO — resolving latest Linux x64 release asset..."
-              LATEST_URL=$(curl -fsSL "https://github.com{REPO}/releases" | jq -r '[.[].assets[] | select(.name | test("(ubuntu|linux).*x64.*\\.(tar\\.gz|zip)$"; "i"))].browser_download_url // empty')
-              [ -n "$LATEST_URL" ] || { echo "ERROR: No Linux x64 release asset found on $REPO"; exit 1; }
-              echo "Downloading latest asset: $LATEST_URL"
-              wget -O "/tmp/${ASSET_NAME}" "$LATEST_URL"
+            if ! gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release create "$MODEL_RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --title "Cached Llama Agent & Quantized GGUF Models" \
+                --notes "Pre-cached llama-agent binary and split GGUF model weights." \
+                --prerelease
             fi
-            gh release upload "$MODEL_RELEASE_TAG" "/tmp/${ASSET_NAME}" --repo "$GITHUB_REPOSITORY" --clobber || true
-          else
-            gh release download "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET_NAME" --dir /tmp
-          fi
 
-          if file "/tmp/${ASSET_NAME}" | grep -q "Zip archive"; then
-            unzip -q "/tmp/${ASSET_NAME}" -d /tmp/llama-extract
-          else
-            tar -xzf "/tmp/${ASSET_NAME}" -C /tmp/llama-extract
-          fi
-          find /tmp/llama-extract -type f \( -name "llama-agent" -o -name "*.so*" \) -exec cp -P {} "$HOME/.local/bin/" \;
-          chmod +x "$HOME/.local/bin/llama-agent"
-          "$HOME/.local/bin/llama-agent" --version
+            ASSETS=$(gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
+            if ! echo "$ASSETS" | grep -qx "$ASSET_NAME"; then
+              DIRECT_URL="$SERVER_URL/$REPO/releases/download/$LLAMA_AGENT_TAG/$ASSET_NAME"
+              if ! wget --server-response -O "/tmp/$ASSET_NAME" "$DIRECT_URL" 2>&1; then
+                LATEST_URL=$(curl -fsSL "$API_URL/repos/$REPO/releases" | jq -r '[.[].assets[] | select(.name | test("(ubuntu|linux).*x64.*\\.(tar\\.gz|zip)$"; "i"))].browser_download_url // empty')
+                [ -n "$LATEST_URL" ] || { echo "ERROR: No Linux x64 release asset found on $REPO"; exit 1; }
+                wget -O "/tmp/$ASSET_NAME" "$LATEST_URL"
+              fi
+              gh release upload "$MODEL_RELEASE_TAG" "/tmp/$ASSET_NAME" --repo "$GITHUB_REPOSITORY" --clobber || true
+            else
+              gh release download "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET_NAME" --dir /tmp
+            fi
 
-          MODEL_FILE="${{ steps.model.outputs.file }}"
-          MODEL_REPO="${{ steps.model.outputs.repo }}"
-          MODEL_PATH="$HOME/.cache/llama.cpp/${MODEL_FILE}"
-
-          if ! gh release download "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "${MODEL_ID}.gguf.part*" --dir /tmp/model-parts 2>/dev/null; then
-            echo "Downloading ${MODEL_FILE} from Hugging Face (${MODEL_REPO})..."
-            curl -fsSL "https://huggingface.co{MODEL_REPO}/resolve/main/${MODEL_FILE}" -o "$MODEL_PATH"
-            split -b 1900M -d -a 2 "$MODEL_PATH" "/tmp/model-parts/${MODEL_ID}.gguf.part"
-            gh release upload "$MODEL_RELEASE_TAG" /tmp/model-parts/${MODEL_ID}.gguf.part* --repo "$GITHUB_REPOSITORY" --clobber || true
-          else
-            cat /tmp/model-parts/${MODEL_ID}.gguf.part* > "$MODEL_PATH"
+            if file "/tmp/$ASSET_NAME" | grep -q "Zip archive"; then
+              unzip -q "/tmp/$ASSET_NAME" -d /tmp/llama-extract
+            else
+              tar -xzf "/tmp/$ASSET_NAME" -C /tmp/llama-extract
+            fi
+            find /tmp/llama-extract -type f \( -name "llama-agent" -o -name "*.so*" \) -exec cp -P {} "$HOME/.local/bin/" \;
+            chmod +x "$HOME/.local/bin/llama-agent"
+            rm -rf /tmp/llama-extract "/tmp/$ASSET_NAME"
           fi
-          rm -rf /tmp/model-parts /tmp/llama-extract "/tmp/${ASSET_NAME}"
 
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=$HOME/.local/bin:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          "$HOME/.local/bin/llama-agent" --version
+
+      - name: Restore Actions cache for GGUF model
+        id: cache-model
+        uses: actions/cache@v5
+        with:
+          path: /home/runner/.cache/llama.cpp
+          key: gguf-model-${{ inputs.model_choice }}-${{ steps.model.outputs.file }}-v1
+
+      - name: Restore or seed selected GGUF model (${{ inputs.model_choice }})
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MODEL_ID="${{ inputs.model_choice }}"
+          MODEL_FILE="${{ steps.model.outputs.file }}"
+          MODEL_REPO="${{ steps.model.outputs.repo }}"
+          MODEL_PATH="$HOME/.cache/llama.cpp/$MODEL_FILE"
+          mkdir -p "$HOME/.cache/llama.cpp" /tmp/model-parts
+
+          if [ ! -s "$MODEL_PATH" ]; then
+            if ! gh release download "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$MODEL_ID.gguf.part*" --dir /tmp/model-parts 2>/dev/null; then
+              echo "Downloading $MODEL_FILE from Hugging Face ($MODEL_REPO)..."
+              curl -fsSL "https://huggingface.co" -o "$MODEL_PATH"
+              split -b 1900M -d -a 2 "$MODEL_PATH" "/tmp/model-parts/$MODEL_ID.gguf.part"
+              gh release upload "$MODEL_RELEASE_TAG" /tmp/model-parts/$MODEL_ID.gguf.part* --repo "$GITHUB_REPOSITORY" --clobber || true
+            else
+              cat /tmp/model-parts/$MODEL_ID.gguf.part* > "$MODEL_PATH"
+            fi
+            rm -rf /tmp/model-parts
+          fi
+
           echo "MODEL_PATH=$MODEL_PATH" >> "$GITHUB_ENV"
 
       - name: Restore incremental checkpoints & ccache from Release (${{ env.DEPS_RELEASE_TAG }})

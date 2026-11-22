@@ -179,7 +179,8 @@ jobs:
     timeout-minutes: 55
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
+      matrix:
+        include: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
 
     steps:
       - name: Checkout repository

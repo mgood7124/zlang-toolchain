@@ -43,7 +43,7 @@ on:
       ndk_version:
         description: 'Android NDK version tag (e.g. r28c or r29 — ships modern Clang for LLVM 23)'
         required: false
-        default: 'r28c'
+        default: 'r29c'
         type: string
       llvm_tag:
         description: 'LLVM monorepo git tag'

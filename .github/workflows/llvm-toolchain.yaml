@@ -281,9 +281,10 @@ jobs:
         if: matrix.target_os == 'windows-xwin' && steps.cache-xwin.outputs.cache-hit != 'true'
         run: |
           XWIN_VER="0.6.7"
-          curl -fsSL "https://github.com{XWIN_VER}/xwin-${XWIN_VER}-x86_64-unknown-linux-musl.tar.gz" -o /tmp/xwin.tar.gz
+          XWIN_DIR_NAME="xwin-$XWIN_VER-x86_64-unknown-linux-musl"
+          curl -fsSL "https://github.com" -o /tmp/xwin.tar.gz
           tar -xzf /tmp/xwin.tar.gz -C /tmp
-          "/tmp/xwin-${XWIN_VER}-x86_64-unknown-linux-musl/xwin" --accept-license --arch x86_64,aarch64 splat --output "$XWIN_DIR"
+          "/tmp/$XWIN_DIR_NAME/xwin" --accept-license --arch x86_64,aarch64 splat --output "$XWIN_DIR"
           rm -rf /tmp/xwin*
 
       - name: Generate CMake Windows MSVC cross-compile toolchain file (x86_64 or aarch64)
@@ -363,10 +364,11 @@ jobs:
         if: matrix.target_os == 'android-ndk' && steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           NDK_VER="${{ inputs.ndk_version }}"
-          curl -fsSL "https://google.com{NDK_VER}-linux.zip" -o /tmp/android-ndk.zip
+          NDK_FOLDER="android-ndk-$NDK_VER"
+          curl -fsSL "https://google.com" -o /tmp/android-ndk.zip
           unzip -q /tmp/android-ndk.zip -d /tmp/ndk-extract
           rm -rf "$ANDROID_NDK_HOME"
-          mv "/tmp/ndk-extract/android-ndk-${NDK_VER}" "$ANDROID_NDK_HOME"
+          mv "/tmp/ndk-extract/$NDK_FOLDER" "$ANDROID_NDK_HOME"
           rm -rf /tmp/android-ndk.zip /tmp/ndk-extract
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
 
@@ -443,7 +445,8 @@ jobs:
           if [ ! -s "$MODEL_PATH" ]; then
             if ! gh release download "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$MODEL_ID.gguf.part*" --dir /tmp/model-parts 2>/dev/null; then
               echo "Downloading $MODEL_FILE from Hugging Face ($MODEL_REPO)..."
-              curl -fsSL "https://huggingface.co" -o "$MODEL_PATH"
+              HF_BASE="https://huggingface.co"
+              curl -fsSL "$HF_BASE/$MODEL_REPO/resolve/main/$MODEL_FILE" -o "$MODEL_PATH"
               split -b 1900M -d -a 2 "$MODEL_PATH" "/tmp/model-parts/$MODEL_ID.gguf.part"
               gh release upload "$MODEL_RELEASE_TAG" /tmp/model-parts/$MODEL_ID.gguf.part* --repo "$GITHUB_REPOSITORY" --clobber || true
             else

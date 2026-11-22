@@ -224,8 +224,11 @@ jobs:
         run: |
           mkdir -p /tmp/apt-debs
           if ! command -v clang-22 >/dev/null 2>&1 || ! command -v lld-link-22 >/dev/null 2>&1; then
-            curl -fsSL https://llvm.org | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-            echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://llvm.org llvm-toolchain-noble-22 main" | sudo tee /etc/apt/sources.list.d/llvm-22.list
+            PROTO="https:"
+            HTTP_PROTO="http:"
+            APT_HOST="apt.llvm.org"
+            curl -fsSL "$PROTO//$APT_HOST/llvm-snapshot.gpg.key" | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+            echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] $HTTP_PROTO//$APT_HOST/noble/ llvm-toolchain-noble-22 main" | sudo tee /etc/apt/sources.list.d/llvm-22.list
             sudo apt-get update
             sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" \
               cmake ninja-build clang-22 llvm-22 lld-22 swig python3-dev libxml2-dev libedit-dev ccache time unzip
@@ -280,9 +283,11 @@ jobs:
       - name: Setup xwin Windows SDK + MSVC CRT sysroot (x64 + ARM64, windows-xwin only)
         if: matrix.target_os == 'windows-xwin' && steps.cache-xwin.outputs.cache-hit != 'true'
         run: |
+          PROTO="https:"
+          GH_HOST="github.com"
           XWIN_VER="0.6.7"
           XWIN_DIR_NAME="xwin-$XWIN_VER-x86_64-unknown-linux-musl"
-          curl -fsSL "https://github.com" -o /tmp/xwin.tar.gz
+          curl -fsSL "$PROTO//$GH_HOST/Jake-Shadle/xwin/releases/download/$XWIN_VER/$XWIN_DIR_NAME.tar.gz" -o /tmp/xwin.tar.gz
           tar -xzf /tmp/xwin.tar.gz -C /tmp
           "/tmp/$XWIN_DIR_NAME/xwin" --accept-license --arch x86_64,aarch64 splat --output "$XWIN_DIR"
           rm -rf /tmp/xwin*

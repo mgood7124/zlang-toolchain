@@ -315,9 +315,7 @@ jobs:
             DIRECT_URL="$GITHUB_SERVER_URL/${REPO}/releases/download/${LLAMA_AGENT_TAG}/${ASSET_NAME}"
             if ! wget --server-response -O "/tmp/${ASSET_NAME}" "$DIRECT_URL" 2>&1; then
               echo "Exact tag $LLAMA_AGENT_TAG not found on $REPO — resolving latest Linux x64 release asset..."
-              LATEST_URL=$(curl -fsSL "https://github.com{REPO}/releases" \
-
-                | jq -r '[.[].assets[] | select(.name | test("(ubuntu|linux).*x64.*\\.(tar\\.gz|zip)$"; "i"))][0].browser_download_url // empty')
+              LATEST_URL=$(curl -fsSL "https://github.com{REPO}/releases" | jq -r '[.[].assets[] | select(.name | test("(ubuntu|linux).*x64.*\\.(tar\\.gz|zip)$"; "i"))][0].browser_download_url // empty')
               [ -n "$LATEST_URL" ] || { echo "ERROR: No Linux x64 release asset found on $REPO"; exit 1; }
               echo "Downloading latest asset: $LATEST_URL"
               wget -O "/tmp/${ASSET_NAME}" "$LATEST_URL"

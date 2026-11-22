@@ -1,0 +1,673 @@
+name: Incremental Full LLVM + Clang + LLD + LLDB + Runtimes Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_choice:
+        description: 'Model to run (Recommended: gemma-4-e4b — fastest & highest success rate on 4 vCPUs)'
+        required: true
+        default: 'gemma-4-e4b'
+        type: choice
+        options:
+          - 'gemma-4-e4b'
+          - 'qwen35-9b'
+          - 'qwen3-8b'
+          - 'qwen3-4b-instruct-2507'
+      target_os:
+        description: 'Target OS ABI (linux, windows-xwin = MSVC .lib via clang+xwin, android-ndk = Android ELF .a/.so)'
+        required: true
+        default: 'windows-xwin'
+        type: choice
+        options:
+          - 'linux'
+          - 'windows-xwin'
+          - 'android-ndk'
+      android_abi:
+        description: 'Android ABI (used when target_os is android-ndk)'
+        required: false
+        default: 'arm64-v8a'
+        type: choice
+        options:
+          - 'arm64-v8a'
+          - 'armeabi-v7a'
+          - 'x86_64'
+          - 'x86'
+      android_api:
+        description: 'Android minimum API level (used when target_os is android-ndk)'
+        required: false
+        default: '24'
+        type: string
+      ndk_version:
+        description: 'Android NDK version tag (e.g. r28c or r29 — ships modern Clang for LLVM 23)'
+        required: false
+        default: 'r28c'
+        type: string
+      llvm_tag:
+        description: 'LLVM monorepo git tag'
+        required: false
+        default: 'llvmorg-23.1.0'
+        type: string
+      llvm_targets:
+        description: 'LLVM targets (X86=32/64-bit Intel & AMD, ARM=32-bit ARM, AArch64=64-bit ARM, Mips=32/64-bit MIPS)'
+        required: false
+        default: 'X86;ARM;AArch64;Mips'
+        type: string
+      custom_prompt:
+        description: 'Optional custom instructions (overrides default full toolchain build prompt)'
+        required: false
+        default: ''
+        type: string
+      slice:
+        description: 'Continuation slice number (leave at 1 when starting)'
+        required: false
+        default: '1'
+        type: string
+      max_slices:
+        description: 'Hard ceiling on continuation slices (anti-loop guard)'
+        required: false
+        default: '12'
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: incremental-llvm-suite-${{ github.ref }}-${{ inputs.target_os }}-${{ inputs.android_abi }}
+  cancel-in-progress: false
+
+env:
+  LLAMA_AGENT_TAG: b1094
+  MODEL_RELEASE_TAG: models-v1
+  DEPS_RELEASE_TAG: deps-prebuilt-v1
+  LLAMA_CACHE: /home/runner/.cache/llama.cpp
+  PREBUILT_PREFIX: /home/runner/.cache/prebuilt-deps
+  XWIN_DIR: /home/runner/.cache/xwin
+  ANDROID_NDK_HOME: /home/runner/.cache/android-ndk
+  CCACHE_DIR: /home/runner/.cache/ccache
+  CCACHE_MAXSIZE: 8G
+  OMP_NUM_THREADS: 4
+  CC: clang
+  CXX: clang++
+  LDFLAGS: -fuse-ld=lld
+
+jobs:
+  incremental-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    outputs:
+      all_done: ${{ steps.checkpoint.outputs.all_done }}
+      artifact_prefix: ${{ steps.checkpoint.outputs.artifact_prefix }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Resolve model & target key configuration
+        id: model
+        run: |
+          case "${{ inputs.model_choice }}" in
+            qwen35-9b)
+              echo "repo=unsloth/Qwen3.5-9B-GGUF" >> "$GITHUB_OUTPUT"
+              echo "file=Qwen3.5-9B-Q4_K_M.gguf" >> "$GITHUB_OUTPUT"
+              echo "ctx=32768" >> "$GITHUB_OUTPUT"
+              ;;
+            qwen3-4b-instruct-2507)
+              echo "repo=unsloth/Qwen3-4B-Instruct-2507-GGUF" >> "$GITHUB_OUTPUT"
+              echo "file=Qwen3-4B-Instruct-2507-Q4_K_M.gguf" >> "$GITHUB_OUTPUT"
+              echo "ctx=32768" >> "$GITHUB_OUTPUT"
+              ;;
+            qwen3-8b)
+              echo "repo=Qwen/Qwen3-8B-GGUF" >> "$GITHUB_OUTPUT"
+              echo "file=Qwen3-8B-Q4_K_M.gguf" >> "$GITHUB_OUTPUT"
+              echo "ctx=32768" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "repo=unsloth/gemma-4-E4B-it-GGUF" >> "$GITHUB_OUTPUT"
+              echo "file=gemma-4-E4B-it-UD-Q4_K_XL.gguf" >> "$GITHUB_OUTPUT"
+              echo "ctx=32768" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+          if [ "${{ inputs.target_os }}" = "android-ndk" ]; then
+            echo "key_prefix=llvm-suite-full-android-${{ inputs.android_abi }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "key_prefix=llvm-suite-full-${{ inputs.target_os }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache apt archives
+        uses: actions/cache@v5
+        with:
+          path: /tmp/apt-debs
+          key: apt-cmake-ninja-clang22-lldb-ccache-v1
+
+      - name: Install Clang 22, LLD 22, CMake, Ninja, LLDB deps & ccache
+        run: |
+          if command -v clang-22 >/dev/null 2>&1 && command -v lld-link-22 >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && command -v swig >/dev/null 2>&1 && command -v ccache >/dev/null 2>&1 && [ -x /usr/bin/time ]; then
+            echo "Clang 22 and all build tools preinstalled."
+          else
+            mkdir -p /tmp/apt-debs
+            curl -fsSL https://llvm.org | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+            echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://llvm.org llvm-toolchain-noble-22 main" | sudo tee /etc/apt/sources.list.d/llvm-22.list
+            sudo apt-get update
+            sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" \
+              cmake ninja-build clang-22 llvm-22 lld-22 swig python3-dev libxml2-dev libedit-dev ccache time unzip
+          fi
+
+          for tool in clang clang++ lld lld-link ld.lld llvm-lib llvm-rc llvm-ar llvm-ranlib; do
+            if [ -x "/usr/bin/${tool}-22" ]; then
+              sudo ln -sf "/usr/bin/${tool}-22" "/usr/local/bin/${tool}"
+            fi
+          done
+          clang --version
+
+      - name: Cache xwin Windows SDK + MSVC CRT sysroot (windows-xwin only)
+        if: inputs.target_os == 'windows-xwin'
+        id: cache-xwin
+        uses: actions/cache@v5
+        with:
+          path: /home/runner/.cache/xwin
+          key: xwin-msvc-sdk-v2
+
+      - name: Setup xwin Windows SDK + MSVC CRT sysroot (windows-xwin only)
+        if: inputs.target_os == 'windows-xwin' && steps.cache-xwin.outputs.cache-hit != 'true'
+        run: |
+          XWIN_VER="0.6.7"
+          curl -fsSL "https://github.com{XWIN_VER}/xwin-${XWIN_VER}-x86_64-unknown-linux-musl.tar.gz" -o /tmp/xwin.tar.gz
+          tar -xzf /tmp/xwin.tar.gz -C /tmp
+          "/tmp/xwin-${XWIN_VER}-x86_64-unknown-linux-musl/xwin" --accept-license splat --output "$XWIN_DIR"
+          rm -rf /tmp/xwin*
+
+      - name: Generate CMake Windows MSVC cross-compile toolchain file (windows-xwin only)
+        if: inputs.target_os == 'windows-xwin'
+        run: |
+          cat << EOF > /tmp/windows-msvc-toolchain.cmake
+          set(CMAKE_SYSTEM_NAME Windows)
+          set(CMAKE_SYSTEM_PROCESSOR AMD64)
+          set(CMAKE_C_COMPILER /usr/local/bin/clang)
+          set(CMAKE_CXX_COMPILER /usr/local/bin/clang++)
+          set(CMAKE_LINKER /usr/local/bin/lld-link)
+          set(CMAKE_AR /usr/local/bin/llvm-lib)
+          set(CMAKE_RC_COMPILER /usr/local/bin/llvm-rc)
+          set(CMAKE_C_COMPILER_TARGET x86_64-pc-windows-msvc)
+          set(CMAKE_CXX_COMPILER_TARGET x86_64-pc-windows-msvc)
+          set(CMAKE_C_FLAGS_INIT "-winsysroot ${XWIN_DIR}")
+          set(CMAKE_CXX_FLAGS_INIT "-winsysroot ${XWIN_DIR}")
+          set(CMAKE_EXE_LINKER_FLAGS_INIT "-winsysroot:${XWIN_DIR}")
+          set(CMAKE_SHARED_LINKER_FLAGS_INIT "-winsysroot:${XWIN_DIR}")
+          set(CMAKE_FIND_ROOT_PATH "${PREBUILT_PREFIX}")
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          EOF
+
+      - name: Cache Android NDK (android-ndk only)
+        if: inputs.target_os == 'android-ndk'
+        id: cache-ndk
+        uses: actions/cache@v5
+        with:
+          path: /home/runner/.cache/android-ndk
+          key: android-ndk-${{ inputs.ndk_version }}-linux-v1
+
+      - name: Download & unpack Android NDK (android-ndk only)
+        if: inputs.target_os == 'android-ndk' && steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          NDK_VER="${{ inputs.ndk_version }}"
+          curl -fsSL "https://google.com{NDK_VER}-linux.zip" -o /tmp/android-ndk.zip
+          unzip -q /tmp/android-ndk.zip -d /tmp/ndk-extract
+          rm -rf "$ANDROID_NDK_HOME"
+          mv "/tmp/ndk-extract/android-ndk-${NDK_VER}" "$ANDROID_NDK_HOME"
+          rm -rf /tmp/android-ndk.zip /tmp/ndk-extract
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
+
+      - name: Restore or seed llama-agent binary & model from Release (${{ env.MODEL_RELEASE_TAG }})
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="gary149/llama-agent"
+          MODEL_ID="${{ inputs.model_choice }}"
+          ASSET_NAME="llama-agent-${LLAMA_AGENT_TAG}-bin-ubuntu-x64.tar.gz"
+          mkdir -p "$HOME/.local/bin" "$HOME/.cache/llama.cpp" /tmp/llama-extract /tmp/model-parts
+
+          if ! gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$MODEL_RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Cached Llama Agent & Quantized GGUF Models" \
+              --notes "Pre-cached llama-agent binary and split GGUF model weights." \
+              --prerelease
+          fi
+
+          ASSETS=$(gh release view "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
+
+          if ! echo "$ASSETS" | grep -qx "$ASSET_NAME"; then
+            DIRECT_URL="$GITHUB_SERVER_URL/${REPO}/releases/download/${LLAMA_AGENT_TAG}/${ASSET_NAME}"
+            if ! wget --server-response -O "/tmp/${ASSET_NAME}" "$DIRECT_URL" 2>&1; then
+              echo "Exact tag $LLAMA_AGENT_TAG not found on $REPO — resolving latest Linux x64 release asset..."
+              LATEST_URL=$(curl -fsSL "https://github.com{REPO}/releases" \
+
+                | jq -r '[.[].assets[] | select(.name | test("(ubuntu|linux).*x64.*\\.(tar\\.gz|zip)$"; "i"))].browser_download_url // empty')
+              [ -n "$LATEST_URL" ] || { echo "ERROR: No Linux x64 release asset found on $REPO"; exit 1; }
+              echo "Downloading latest asset: $LATEST_URL"
+              wget -O "/tmp/${ASSET_NAME}" "$LATEST_URL"
+            fi
+            gh release upload "$MODEL_RELEASE_TAG" "/tmp/${ASSET_NAME}" --repo "$GITHUB_REPOSITORY" --clobber || true
+          else
+            gh release download "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET_NAME" --dir /tmp
+          fi
+
+          if file "/tmp/${ASSET_NAME}" | grep -q "Zip archive"; then
+            unzip -q "/tmp/${ASSET_NAME}" -d /tmp/llama-extract
+          else
+            tar -xzf "/tmp/${ASSET_NAME}" -C /tmp/llama-extract
+          fi
+          find /tmp/llama-extract -type f \( -name "llama-agent" -o -name "*.so*" \) -exec cp -P {} "$HOME/.local/bin/" \;
+          chmod +x "$HOME/.local/bin/llama-agent"
+          "$HOME/.local/bin/llama-agent" --version
+
+          MODEL_FILE="${{ steps.model.outputs.file }}"
+          MODEL_REPO="${{ steps.model.outputs.repo }}"
+          MODEL_PATH="$HOME/.cache/llama.cpp/${MODEL_FILE}"
+
+          if ! gh release download "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "${MODEL_ID}.gguf.part*" --dir /tmp/model-parts 2>/dev/null; then
+            echo "Downloading ${MODEL_FILE} from Hugging Face (${MODEL_REPO})..."
+            curl -fsSL "https://huggingface.co{MODEL_REPO}/resolve/main/${MODEL_FILE}" -o "$MODEL_PATH"
+            split -b 1900M -d -a 2 "$MODEL_PATH" "/tmp/model-parts/${MODEL_ID}.gguf.part"
+            gh release upload "$MODEL_RELEASE_TAG" /tmp/model-parts/${MODEL_ID}.gguf.part* --repo "$GITHUB_REPOSITORY" --clobber || true
+          else
+            cat /tmp/model-parts/${MODEL_ID}.gguf.part* > "$MODEL_PATH"
+          fi
+          rm -rf /tmp/model-parts /tmp/llama-extract "/tmp/${ASSET_NAME}"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$HOME/.local/bin:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "MODEL_PATH=$MODEL_PATH" >> "$GITHUB_ENV"
+
+      - name: Restore incremental checkpoints & ccache from Release (${{ env.DEPS_RELEASE_TAG }})
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$PREBUILT_PREFIX/bin" "$PREBUILT_PREFIX/lib" "$CCACHE_DIR" /tmp/dep-restore
+          KEY_PREFIX="${{ steps.model.outputs.key_prefix }}"
+
+          if ! gh release view "$DEPS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$DEPS_RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Incremental Full LLVM + Clang + LLD + LLDB + Runtimes" \
+              --notes "Prebuilt Linux (.a/.so), Windows MSVC (.lib/.dll), and Android NDK (.a/.so) LLVM toolchain + sanitizer runtimes." \
+              --prerelease
+          fi
+
+          if gh release download "$DEPS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "${KEY_PREFIX}-checkpoint.tar.gz" --dir /tmp/dep-restore 2>/dev/null; then
+            tar -xzf "/tmp/dep-restore/${KEY_PREFIX}-checkpoint.tar.gz" -C /
+            echo "Restored checkpoint for '$KEY_PREFIX':"
+            ls -lh "$PREBUILT_PREFIX/lib" | head -n 25 || true
+          else
+            echo "No prior checkpoint found for '$KEY_PREFIX' — starting fresh."
+          fi
+
+          PREV_LIBS=$(find "$PREBUILT_PREFIX/lib" -type f \( -name "*.a" -o -name "*.lib" -o -name "*.so*" -o -name "*.dll" \) 2>/dev/null | wc -l)
+          PREV_CCACHE=$(ccache -s 2>/dev/null | awk '/files in cache/ {print $NF+0}' | tail -n 1)
+          echo "PREV_LIBS=${PREV_LIBS:-0}" >> "$GITHUB_ENV"
+          echo "PREV_CCACHE=${PREV_CCACHE:-0}" >> "$GITHUB_ENV"
+
+      - name: Install incremental target-by-target builder helper
+        run: |
+          sudo tee /usr/local/bin/build-incremental.sh >/dev/null << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          BUILD_DIR="${1:?Usage: build-incremental.sh <build_dir> <root_target_1> [root_target_2 ...]}"
+          shift
+          ROOT_TARGETS=("$@")
+
+          SOFT_LIMIT_SEC=2100   # 35 minutes (leaves 20m buffer inside 55m job)
+          START_TS=$(date +%s)
+          mkdir -p "$PREBUILT_PREFIX/bin" "$PREBUILT_PREFIX/lib" /tmp/inc-status
+          echo "false" > /tmp/inc-status/done
+
+          # 1. Build & cache host TableGen tools (llvm-tblgen, clang-tblgen, lldb-tblgen) first
+          for tbl in llvm-tblgen clang-tblgen lldb-tblgen; do
+            if [ -x "$PREBUILT_PREFIX/bin/$tbl" ]; then
+              mkdir -p "$BUILD_DIR/bin" "$BUILD_DIR/NATIVE/bin"
+              cp "$PREBUILT_PREFIX/bin/$tbl" "$BUILD_DIR/bin/" 2>/dev/null || true
+              cp "$PREBUILT_PREFIX/bin/$tbl" "$BUILD_DIR/NATIVE/bin/" 2>/dev/null || true
+            elif ninja -C "$BUILD_DIR" -t targets all 2>/dev/null | grep -qE "^(NATIVE/bin/${tbl}|${tbl}):"; then
+              echo "=== Building & caching host $tbl ==="
+              if ninja -C "$BUILD_DIR" -t targets all 2>/dev/null | grep -q "^NATIVE/bin/${tbl}:"; then
+                cmake --build "$BUILD_DIR" --target "NATIVE/bin/${tbl}"
+                cp "$BUILD_DIR/NATIVE/bin/${tbl}" "$PREBUILT_PREFIX/bin/"
+              else
+                cmake --build "$BUILD_DIR" --target "$tbl"
+                cp "$BUILD_DIR/bin/${tbl}" "$PREBUILT_PREFIX/bin/"
+              fi
+            fi
+          done
+
+          # 2. Extract transitive LLVM, Clang, LLD & LLDB library targets in topological order
+          TARGETS=$(ninja -C "$BUILD_DIR" -t inputs "${ROOT_TARGETS[@]}" \
+
+            | grep -oE 'lib/(lib)?[A-Za-z0-9_+-]+\.(a|so|lib)' \
+            | sed -E 's|^lib/(lib)?||; s|\.(a|so|lib)$||' \
+            | awk '!seen[$0]++')
+
+          TOTAL=$(printf '%s\n' "$TARGETS" | grep -c . || true)
+          echo "Topological dependency queue ($TOTAL LLVM/Clang/LLD/LLDB libraries)"
+
+          for target in $TARGETS; do
+            if ls "$PREBUILT_PREFIX/lib/lib${target}."* "$PREBUILT_PREFIX/lib/${target}.lib" >/dev/null 2>&1; then
+              echo "[SKIP cached] $target"
+              continue
+            fi
+
+            ELAPSED=$(( $(date +%s) - START_TS ))
+            if [ "$ELAPSED" -ge "$SOFT_LIMIT_SEC" ]; then
+              echo "[PAUSE] Soft budget reached (${ELAPSED}s >= ${SOFT_LIMIT_SEC}s). Resuming in next slice."
+              exit 0
+            fi
+
+            REMAINING=$(( 2520 - ELAPSED )) # 42m hard ceiling
+            [ "$REMAINING" -gt 900 ] && CAP=900 || CAP="$REMAINING"
+
+            echo "=== [BUILD] $target (elapsed: ${ELAPSED}s, cap: ${CAP}s) ==="
+            if timeout --signal=TERM --kill-after=30s "${CAP}s" cmake --build "$BUILD_DIR" --target "$target"; then
+              cp -P "$BUILD_DIR/lib/lib${target}."* "$PREBUILT_PREFIX/lib/" 2>/dev/null || true
+              cp -P "$BUILD_DIR/lib/${target}.lib" "$PREBUILT_PREFIX/lib/" 2>/dev/null || true
+              find "$BUILD_DIR" -type d -name "${target}.dir" -exec rm -rf {} + 2>/dev/null || true
+            else
+              echo "[TIMEOUT/ERROR] Target $target interrupted — partial .o/.obj files saved in ccache."
+              exit 1
+            fi
+          done
+
+          # 3. Build & install Compiler-RT (ASan, UBSan, TSan, MSan, LSan, profile, builtins) + C++ runtimes
+          if [ ! -f "$PREBUILT_PREFIX/.runtimes-done" ]; then
+            ELAPSED=$(( $(date +%s) - START_TS ))
+            if [ "$ELAPSED" -ge "$SOFT_LIMIT_SEC" ]; then
+              echo "[PAUSE] Soft budget reached before runtimes — resuming in next slice."
+              exit 0
+            fi
+            REMAINING=$(( 2520 - ELAPSED ))
+            echo "=== [BUILD] Compiler-RT (ASan/UBSan/TSan/Builtins) & Runtimes (cap: ${REMAINING}s) ==="
+            if timeout --signal=TERM --kill-after=30s "${REMAINING}s" cmake --build "$BUILD_DIR" --target runtimes install-runtimes; then
+              touch "$PREBUILT_PREFIX/.runtimes-done"
+            else
+              echo "[TIMEOUT/ERROR] Runtimes interrupted — partial objects saved in ccache."
+              exit 1
+            fi
+          fi
+
+          echo "true" > /tmp/inc-status/done
+          echo "=== All $TOTAL libraries + Compiler-RT/ASan runtimes built and cached! ==="
+          EOF
+          sudo chmod +x /usr/local/bin/build-incremental.sh
+
+      - name: Run llama-agent full LLVM + Clang + LLD + LLDB + Runtimes build (Slice ${{ inputs.slice }}/${{ inputs.max_slices }})
+        id: run-agent
+        continue-on-error: true
+        env:
+          USER_PROMPT: ${{ inputs.custom_prompt }}
+          TARGET_OS: ${{ inputs.target_os }}
+          ANDROID_ABI: ${{ inputs.android_abi }}
+          ANDROID_API: ${{ inputs.android_api }}
+          LLVM_TAG: ${{ inputs.llvm_tag }}
+          LLVM_TARGETS: ${{ inputs.llvm_targets }}
+        run: |
+          set -o pipefail
+
+          if [ "$TARGET_OS" = "windows-xwin" ]; then
+            CMAKE_EXTRA_FLAGS="-DCMAKE_TOOLCHAIN_FILE=/tmp/windows-msvc-toolchain.cmake -DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DCMAKE_C_COMPILER=/usr/local/bin/clang;-DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_ENABLE_RUNTIMES=compiler-rt -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON -DLLDB_ENABLE_PYTHON=OFF -DLLDB_ENABLE_LIBXML2=OFF"
+          elif [ "$TARGET_OS" = "android-ndk" ]; then
+            CMAKE_EXTRA_FLAGS="-DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake -DANDROID_ABI=$ANDROID_ABI -DANDROID_PLATFORM=android-$ANDROID_API -DANDROID_STL=c++_shared -DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DCMAKE_C_COMPILER=/usr/local/bin/clang;-DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_ENABLE_RUNTIMES=compiler-rt -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON -DLLDB_ENABLE_PYTHON=OFF -DLLDB_ENABLE_LIBXML2=OFF"
+          else
+            CMAKE_EXTRA_FLAGS="-DCMAKE_C_COMPILER=/usr/local/bin/clang -DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_USE_LINKER=lld -DLLVM_ENABLE_RUNTIMES=compiler-rt;libcxx;libcxxabi;libunwind -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON"
+          fi
+
+          if [ -n "$USER_PROMPT" ]; then
+            FINAL_PROMPT="$USER_PROMPT"
+          else
+            FINAL_PROMPT=$(cat << EOF
+          Build the complete LLVM + Clang + LLD + LLDB + Compiler-RT (ASan/UBSan/TSan/Builtins) library and header suite incrementally into $PREBUILT_PREFIX (target OS: $TARGET_OS):
+          1. If /tmp/llvm-src does not exist, run: git clone --depth 1 --branch $LLVM_TAG https://github.com /tmp/llvm-src
+          2. Configure the full toolchain with CMake + Ninja + ccache into /tmp/llvm-build:
+             cmake -S /tmp/llvm-src/llvm -B /tmp/llvm-build -G Ninja -DCMAKE_BUILD_TYPE=Release $CMAKE_EXTRA_FLAGS -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_INSTALL_PREFIX=$PREBUILT_PREFIX -DLLVM_ENABLE_PROJECTS="clang;lld;lldb" -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS" -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_TOOLS=OFF -DLLVM_INCLUDE_UTILS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF -DCLANG_BUILD_TOOLS=OFF -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF -DLLD_BUILD_TOOLS=OFF -DLLDB_INCLUDE_TESTS=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_TERMINFO=OFF
+          3. Run the topological incremental builder across all LLVM, Clang, LLD, LLDB, and Compiler-RT libraries:
+             /usr/local/bin/build-incremental.sh /tmp/llvm-build llvm-libraries clang-libraries lld-libraries liblldb
+          4. If any compiler or CMake error occurs, diagnose and fix it, then re-run /usr/local/bin/build-incremental.sh.
+          5. If /tmp/inc-status/done contains "true", install all headers and CMake package exports via:
+             cmake --build /tmp/llvm-build --target install-llvm-headers install-clang-headers install-lld-headers install-lldb-headers install-cmake-exports install-clang-cmake-exports install-lld-cmake-exports
+          EOF
+          )
+          fi
+
+          printf '%s\n' "$FINAL_PROMPT" | /usr/bin/time -f "%M" -o /tmp/agent-mem-kb.txt \
+            timeout --signal=TERM --kill-after=30s 43m \
+            "$HOME/.local/bin/llama-agent" \
+            --backend local \
+            --offline \
+            --yolo \
+            --no-session \
+            --max-iterations 35 \
+            --jinja \
+            -m "$MODEL_PATH" \
+            --threads 4 \
+            --ctx-size "${{ steps.model.outputs.ctx }}" \
+            -n 8192 \
+            2>&1 | tee "inc-agent-slice-${{ inputs.slice }}.log"
+
+      - name: Upload checkpoint & auto-dispatch next slice if needed
+        id: checkpoint
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TARGET_OS="${{ inputs.target_os }}"
+          KEY_PREFIX="${{ steps.model.outputs.key_prefix }}"
+          SLICE="${{ inputs.slice }}"
+          MAX_SLICES="${{ inputs.max_slices }}"
+          ALL_DONE=$(cat /tmp/inc-status/done 2>/dev/null || echo "false")
+
+          echo "all_done=$ALL_DONE" >> "$GITHUB_OUTPUT"
+          echo "artifact_prefix=$KEY_PREFIX" >> "$GITHUB_OUTPUT"
+
+          CUR_LIBS=$(find "$PREBUILT_PREFIX/lib" -type f \( -name "*.a" -o -name "*.lib" -o -name "*.so*" -o -name "*.dll" \) 2>/dev/null | wc -l)
+          CUR_CCACHE=$(ccache -s 2>/dev/null | awk '/files in cache/ {print $NF+0}' | tail -n 1)
+          NEW_LIBS=$(( ${CUR_LIBS:-0} - ${PREV_LIBS:-0} ))
+          NEW_OBJS=$(( ${CUR_CCACHE:-0} - ${PREV_CCACHE:-0} ))
+
+          tar -czf "/tmp/${KEY_PREFIX}-checkpoint.tar.gz" "$PREBUILT_PREFIX" "$CCACHE_DIR" 2>/dev/null || true
+          if [ -s "/tmp/${KEY_PREFIX}-checkpoint.tar.gz" ]; then
+            gh release upload "$DEPS_RELEASE_TAG" "/tmp/${KEY_PREFIX}-checkpoint.tar.gz" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          fi
+
+          if [ "$ALL_DONE" = "true" ]; then
+            tar -czf "/tmp/${KEY_PREFIX}-prebuilt.tar.gz" -C "$PREBUILT_PREFIX" .
+            gh release upload "$DEPS_RELEASE_TAG" "/tmp/${KEY_PREFIX}-prebuilt.tar.gz" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          fi
+
+          {
+            echo "## Incremental Full LLVM + Clang + LLD + LLDB + Runtimes Summary — Slice $SLICE / $MAX_SLICES (\`$KEY_PREFIX\`)"
+            echo "- **Target OS:** \`$TARGET_OS\` | **Architectures:** \`${{ inputs.llvm_targets }}\` | **Model:** \`${{ inputs.model_choice }}\` | **Completed:** \`$ALL_DONE\`"
+            echo "- **Cached Libraries & Runtimes:** \`$CUR_LIBS\` total (+\`$NEW_LIBS\` this slice)"
+            echo "- **CCache Objects:** \`${CUR_CCACHE:-0}\` total (+\`$NEW_OBJS\` this slice)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$ALL_DONE" = "true" ]; then
+            echo "Build 100% complete! Published ${KEY_PREFIX}-prebuilt.tar.gz to $DEPS_RELEASE_TAG."
+            exit 0
+          fi
+
+          if [ "$NEW_LIBS" -le 0 ] && [ "$NEW_OBJS" -le 0 ]; then
+            echo "ERROR: Zero forward progress in slice $SLICE (0 new libs, 0 new ccache objects) — aborting to prevent infinite loop."
+            exit 1
+          fi
+
+          if [ "$SLICE" -ge "$MAX_SLICES" ]; then
+            echo "ERROR: Reached MAX_SLICES ($MAX_SLICES) with $CUR_LIBS libraries cached — stopping."
+            exit 1
+          fi
+
+          NEXT_SLICE=$((SLICE + 1))
+          echo "Progress verified (+$NEW_LIBS libs, +$NEW_OBJS ccache objs). Dispatching slice $NEXT_SLICE..."
+          gh workflow run "llvm-clang-toolchain.yaml" \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF_NAME" \
+            -f model_choice="${{ inputs.model_choice }}" \
+            -f target_os="$TARGET_OS" \
+            -f android_abi="${{ inputs.android_abi }}" \
+            -f android_api="${{ inputs.android_api }}" \
+            -f ndk_version="${{ inputs.ndk_version }}" \
+            -f llvm_tag="${{ inputs.llvm_tag }}" \
+            -f llvm_targets="${{ inputs.llvm_targets }}" \
+            -f custom_prompt="${{ inputs.custom_prompt }}" \
+            -f slice="$NEXT_SLICE" \
+            -f max_slices="$MAX_SLICES"
+
+  # Job 2A: Native Windows verification (links LLVM + Clang + LLD + X86/ARM/AArch64/Mips via CMake)
+  verify-windows:
+    needs: incremental-build
+    if: inputs.target_os == 'windows-xwin' && needs.incremental-build.outputs.all_done == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Exclude cache & build folders from Windows Defender
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "C:/Users/runneradmin/.cache/prebuilt-deps" | Out-Null
+          Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cache"
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+
+      - name: Download cross-compiled Windows MSVC LLVM suite archive from Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $prefix = "${{ needs.incremental-build.outputs.artifact_prefix }}"
+          gh release download "${{ env.DEPS_RELEASE_TAG }}" `
+            --repo "${{ github.repository }}" `
+            --pattern "${prefix}-prebuilt.tar.gz" `
+            --dir C:/Users/runneradmin/.cache
+          tar -xzf "C:/Users/runneradmin/.cache/${prefix}-prebuilt.tar.gz" -C C:/Users/runneradmin/.cache/prebuilt-deps
+
+      - name: Run native Windows clang-cl + LLD + Multi-Arch CTest smoke test
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path C:/win-smoke-test | Out-Null
+          @'
+          cmake_minimum_required(VERSION 3.20)
+          project(win_llvm_suite_smoke LANGUAGES C CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          find_package(LLVM REQUIRED CONFIG)
+          find_package(Clang REQUIRED CONFIG)
+          find_package(LLD REQUIRED CONFIG)
+          llvm_map_components_to_libnames(LLVM_LIBS
+            Support MC MCDisassembler
+            X86Disassembler X86Desc X86Info
+            ARMDisassembler ARMDesc ARMInfo
+            AArch64Disassembler AArch64Desc AArch64Info
+            MipsDisassembler MipsDesc MipsInfo
+          )
+          add_executable(smoke main.cpp)
+          target_include_directories(smoke PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS} ${LLD_INCLUDE_DIRS})
+          target_compile_definitions(smoke PRIVATE ${LLVM_DEFINITIONS})
+          target_link_libraries(smoke PRIVATE ${LLVM_LIBS} clangBasic lldCommon)
+          enable_testing()
+          add_test(NAME WinSmokeTest COMMAND smoke)
+          '@ | Set-Content -Path C:/win-smoke-test/CMakeLists.txt
+
+          @'
+          #include <iostream>
+          #include "llvm/Support/TargetSelect.h"
+          #include "clang/Basic/Version.h"
+          #include "lld/Common/Driver.h"
+          int main() {
+              llvm::InitializeAllTargetInfos();
+              llvm::InitializeAllTargetMCs();
+              llvm::InitializeAllDisassemblers();
+              std::cout << "Windows native LLVM (X86/ARM/AArch64/Mips) + " << clang::getClangFullVersion() << " + LLD linked & executed cleanly!\n";
+              return 0;
+          }
+          '@ | Set-Content -Path C:/win-smoke-test/main.cpp
+
+          cmake -S C:/win-smoke-test -B C:/win-smoke-test/build -G Ninja `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
+            -DCMAKE_LINKER=lld-link `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="C:/Users/runneradmin/.cache/prebuilt-deps"
+          cmake --build C:/win-smoke-test/build
+          ctest --test-dir C:/win-smoke-test/build --output-on-failure
+
+  # Job 2B: Android NDK verification (links cross-compiled Android LLVM + Clang + LLD + Multi-Arch libraries)
+  verify-android:
+    needs: incremental-build
+    if: inputs.target_os == 'android-ndk' && needs.incremental-build.outputs.all_done == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Restore Android NDK cache
+        uses: actions/cache@v5
+        with:
+          path: /home/runner/.cache/android-ndk
+          key: android-ndk-${{ inputs.ndk_version }}-linux-v1
+
+      - name: Download prebuilt Android LLVM suite archive from Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PREFIX="${{ needs.incremental-build.outputs.artifact_prefix }}"
+          mkdir -p "$PREBUILT_PREFIX" /tmp/android-smoke
+          gh release download "$DEPS_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${PREFIX}-prebuilt.tar.gz" \
+            --dir /tmp
+          tar -xzf "/tmp/${PREFIX}-prebuilt.tar.gz" -C "$PREBUILT_PREFIX"
+
+      - name: Cross-compile & link Android NDK multi-arch smoke binary
+        run: |
+          cat << 'EOF' > /tmp/android-smoke/CMakeLists.txt
+          cmake_minimum_required(VERSION 3.20)
+          project(android_llvm_suite_smoke LANGUAGES C CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          find_package(LLVM REQUIRED CONFIG)
+          find_package(Clang REQUIRED CONFIG)
+          find_package(LLD REQUIRED CONFIG)
+          llvm_map_components_to_libnames(LLVM_LIBS
+            Support MC MCDisassembler
+            X86Disassembler X86Desc X86Info
+            ARMDisassembler ARMDesc ARMInfo
+            AArch64Disassembler AArch64Desc AArch64Info
+            MipsDisassembler MipsDesc MipsInfo
+          )
+          add_executable(smoke main.cpp)
+          target_include_directories(smoke PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS} ${LLD_INCLUDE_DIRS})
+          target_compile_definitions(smoke PRIVATE ${LLVM_DEFINITIONS})
+          target_link_libraries(smoke PRIVATE ${LLVM_LIBS} clangBasic lldCommon)
+          EOF
+
+          cat << 'EOF' > /tmp/android-smoke/main.cpp
+          #include <iostream>
+          #include "llvm/Support/TargetSelect.h"
+          #include "clang/Basic/Version.h"
+          int main() {
+              llvm::InitializeAllTargetInfos();
+              llvm::InitializeAllTargetMCs();
+              llvm::InitializeAllDisassemblers();
+              std::cout << "Android LLVM (X86/ARM/AArch64/Mips) + " << clang::getClangFullVersion() << "\n";
+              return 0;
+          }
+          EOF
+
+          cmake -S /tmp/android-smoke -B /tmp/android-smoke/build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${{ inputs.android_abi }}" \
+            -DANDROID_PLATFORM="android-${{ inputs.android_api }}" \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_FIND_ROOT_PATH="$PREBUILT_PREFIX" \
+            -DCMAKE_PREFIX_PATH="$PREBUILT_PREFIX"
+          cmake --build /tmp/android-smoke/build
+          file /tmp/android-smoke/build/smoke

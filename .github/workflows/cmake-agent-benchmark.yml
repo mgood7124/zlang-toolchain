@@ -38,7 +38,6 @@ permissions:
   actions: write
 
 env:
-env:
   LLAMA_AGENT_TAG: b1094
   MODEL_RELEASE_TAG: models-v1
   LLAMA_CACHE: /home/runner/.cache/llama.cpp

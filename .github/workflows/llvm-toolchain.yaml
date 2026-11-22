@@ -13,36 +13,30 @@ on:
           - 'qwen35-9b'
           - 'qwen3-8b'
           - 'qwen3-4b-instruct-2507'
-      target_os:
-        description: 'Target OS ABI (linux, windows-xwin, android-ndk, macos = Darwin Mach-O via clang+ld64.lld)'
+      target_suite:
+        description: 'Target OS & ABI suite (default: all — 11 targets across Linux, Windows, macOS & Android x86/ARM)'
         required: true
-        default: 'windows-xwin'
+        default: 'all'
         type: choice
         options:
-          - 'linux'
-          - 'windows-xwin'
-          - 'android-ndk'
-          - 'macos'
-      macos_arch:
-        description: 'macOS target architecture (used when target_os is macos)'
-        required: false
-        default: 'arm64'
-        type: choice
-        options:
-          - 'arm64'
-          - 'x86_64'
-      android_abi:
-        description: 'Android ABI (used when target_os is android-ndk)'
-        required: false
-        default: 'arm64-v8a'
-        type: choice
-        options:
-          - 'arm64-v8a'
-          - 'armeabi-v7a'
-          - 'x86_64'
-          - 'x86'
+          - 'all'
+          - 'linux-all'
+          - 'linux-x86_64'
+          - 'linux-arm64'
+          - 'linux-armhf'
+          - 'windows-all'
+          - 'windows-x86_64'
+          - 'windows-arm64'
+          - 'macos-all'
+          - 'macos-arm64'
+          - 'macos-x86_64'
+          - 'android-all'
+          - 'android-arm64-v8a'
+          - 'android-armeabi-v7a'
+          - 'android-x86_64'
+          - 'android-x86'
       android_api:
-        description: 'Android minimum API level (used when target_os is android-ndk)'
+        description: 'Android minimum API level (used for Android targets)'
         required: false
         default: '24'
         type: string
@@ -57,7 +51,7 @@ on:
         default: 'llvmorg-23.1.0'
         type: string
       llvm_targets:
-        description: 'LLVM targets (X86=32/64-bit Intel & AMD, ARM=32-bit ARM, AArch64=64-bit ARM, Mips=32/64-bit MIPS)'
+        description: 'LLVM CPU backends (X86=32/64-bit Intel & AMD, ARM=32-bit ARM, AArch64=64-bit ARM, Mips=32/64-bit MIPS)'
         required: false
         default: 'X86;ARM;AArch64;Mips'
         type: string
@@ -72,7 +66,7 @@ on:
         default: '1'
         type: string
       max_slices:
-        description: 'Hard ceiling on continuation slices (anti-loop guard)'
+        description: 'Hard ceiling on continuation slices per OS/ABI (anti-loop guard)'
         required: false
         default: '12'
         type: string
@@ -82,7 +76,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: incremental-llvm-suite-${{ github.ref }}-${{ inputs.target_os }}-${{ inputs.macos_arch }}-${{ inputs.android_abi }}
+  group: incremental-llvm-suite-${{ github.ref }}-${{ inputs.target_suite }}
   cancel-in-progress: false
 
 env:
@@ -102,9 +96,61 @@ env:
   LDFLAGS: -fuse-ld=lld
 
 jobs:
-  # Job 1: Extract & cache MacOSX.sdk on macos-latest (only when target_os == 'macos')
+  # Job 0A: Expand target_suite into concrete OS/ABI matrix entries
+  prepare-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      needs_macos: ${{ steps.set-matrix.outputs.needs_macos }}
+    steps:
+      - name: Build target OS/ABI matrix
+        id: set-matrix
+        run: |
+          SUITE="${{ inputs.target_suite }}"
+          ALL_JSON='[
+            {"suite_id":"linux-x86_64","target_os":"linux","arch":"x86_64"},
+            {"suite_id":"linux-arm64","target_os":"linux-arm","arch":"aarch64"},
+            {"suite_id":"linux-armhf","target_os":"linux-arm","arch":"armhf"},
+            {"suite_id":"windows-x86_64","target_os":"windows-xwin","arch":"x86_64"},
+            {"suite_id":"windows-arm64","target_os":"windows-xwin","arch":"aarch64"},
+            {"suite_id":"macos-arm64","target_os":"macos","arch":"arm64"},
+            {"suite_id":"macos-x86_64","target_os":"macos","arch":"x86_64"},
+            {"suite_id":"android-arm64-v8a","target_os":"android-ndk","arch":"arm64-v8a"},
+            {"suite_id":"android-armeabi-v7a","target_os":"android-ndk","arch":"armeabi-v7a"},
+            {"suite_id":"android-x86_64","target_os":"android-ndk","arch":"x86_64"},
+            {"suite_id":"android-x86","target_os":"android-ndk","arch":"x86"}
+          ]'
+
+          case "$SUITE" in
+            all)
+              MATRIX=$(echo "$ALL_JSON" | jq -c '.')
+              ;;
+            linux-all)
+              MATRIX=$(echo "$ALL_JSON" | jq -c '[.[] | select(.target_os == "linux" or .target_os == "linux-arm")]')
+              ;;
+            windows-all)
+              MATRIX=$(echo "$ALL_JSON" | jq -c '[.[] | select(.target_os == "windows-xwin")]')
+              ;;
+            macos-all)
+              MATRIX=$(echo "$ALL_JSON" | jq -c '[.[] | select(.target_os == "macos")]')
+              ;;
+            android-all)
+              MATRIX=$(echo "$ALL_JSON" | jq -c '[.[] | select(.target_os == "android-ndk")]')
+              ;;
+            *)
+              MATRIX=$(echo "$ALL_JSON" | jq -c --arg s "$SUITE" '[.[] | select(.suite_id == $s)]')
+              ;;
+          esac
+
+          NEEDS_MACOS=$(echo "$MATRIX" | jq -r 'any(.[]; .target_os == "macos")')
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "needs_macos=$NEEDS_MACOS" >> "$GITHUB_OUTPUT"
+
+  # Job 0B: Extract & cache MacOSX.sdk on macos-latest whenever any macOS target is included
   prep-macos-sdk:
-    if: inputs.target_os == 'macos'
+    needs: prepare-matrix
+    if: needs.prepare-matrix.outputs.needs_macos == 'true'
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
@@ -121,18 +167,18 @@ jobs:
           SDK_SRC="$(xcrun --show-sdk-path)"
           echo "Extracting dereferenced MacOSX.sdk from: $SDK_SRC"
           mkdir -p /Users/runner/.cache/macos-sdk/MacOSX.sdk
-          # -RL dereferences Apple framework symlinks so Linux ext4 handles all headers & .tbd stubs cleanly
           cp -RL "$SDK_SRC"/. /Users/runner/.cache/macos-sdk/MacOSX.sdk/
           du -sh /Users/runner/.cache/macos-sdk/MacOSX.sdk
 
+  # Job 1: Parallel matrix builder across all selected OSes & ABIs on 16GB Linux VMs
   incremental-build:
-    needs: prep-macos-sdk
-    if: always() && (inputs.target_os != 'macos' || needs.prep-macos-sdk.result == 'success')
+    needs: [prepare-matrix, prep-macos-sdk]
+    if: always() && needs.prepare-matrix.result == 'success' && (needs.prep-macos-sdk.result == 'success' || needs.prep-macos-sdk.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 55
-    outputs:
-      all_done: ${{ steps.checkpoint.outputs.all_done }}
-      artifact_prefix: ${{ steps.checkpoint.outputs.artifact_prefix }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
 
     steps:
       - name: Checkout repository
@@ -164,31 +210,29 @@ jobs:
               ;;
           esac
 
-          if [ "${{ inputs.target_os }}" = "android-ndk" ]; then
-            echo "key_prefix=llvm-suite-full-android-${{ inputs.android_abi }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ inputs.target_os }}" = "macos" ]; then
-            echo "key_prefix=llvm-suite-full-macos-${{ inputs.macos_arch }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "key_prefix=llvm-suite-full-${{ inputs.target_os }}" >> "$GITHUB_OUTPUT"
-          fi
+          echo "key_prefix=llvm-suite-full-${{ matrix.suite_id }}" >> "$GITHUB_OUTPUT"
 
       - name: Cache apt archives
         uses: actions/cache@v5
         with:
           path: /tmp/apt-debs
-          key: apt-cmake-ninja-clang22-lldb-ccache-v1
+          key: apt-cmake-ninja-clang22-arm-lldb-ccache-v1
 
-      - name: Install Clang 22, LLD 22 (ld64.lld + lld-link), CMake, Ninja, LLDB deps & ccache
+      - name: Install Clang 22, LLD 22, Linux ARM cross-sysroots, CMake, Ninja & ccache
         run: |
-          if command -v clang-22 >/dev/null 2>&1 && command -v lld-link-22 >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && command -v swig >/dev/null 2>&1 && command -v ccache >/dev/null 2>&1 && [ -x /usr/bin/time ]; then
-            echo "Clang 22 and all build tools preinstalled."
-          else
-            mkdir -p /tmp/apt-debs
+          mkdir -p /tmp/apt-debs
+          if ! command -v clang-22 >/dev/null 2>&1 || ! command -v lld-link-22 >/dev/null 2>&1; then
             curl -fsSL https://llvm.org | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
             echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://llvm.org llvm-toolchain-noble-22 main" | sudo tee /etc/apt/sources.list.d/llvm-22.list
             sudo apt-get update
             sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" \
               cmake ninja-build clang-22 llvm-22 lld-22 swig python3-dev libxml2-dev libedit-dev ccache time unzip
+          fi
+
+          if [ "${{ matrix.target_os }}" = "linux-arm" ]; then
+            sudo apt-get update
+            sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" \
+              gcc-aarch64-linux-gnu g++-aarch64-linux-gnu gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
           fi
 
           for tool in clang clang++ lld lld-link ld.lld ld64.lld llvm-lib llvm-rc llvm-ar llvm-ranlib llvm-strip; do
@@ -198,36 +242,68 @@ jobs:
           done
           clang --version
 
-      - name: Cache xwin Windows SDK + MSVC CRT sysroot (windows-xwin only)
-        if: inputs.target_os == 'windows-xwin'
+      - name: Generate CMake Linux ARM cross-compile toolchain file (linux-arm only)
+        if: matrix.target_os == 'linux-arm'
+        run: |
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            TRIPLE="aarch64-linux-gnu"
+            PROC="aarch64"
+          else
+            TRIPLE="arm-linux-gnueabihf"
+            PROC="armv7l"
+          fi
+          cat << EOF > /tmp/linux-arm-toolchain.cmake
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR ${PROC})
+          set(CMAKE_C_COMPILER /usr/local/bin/clang)
+          set(CMAKE_CXX_COMPILER /usr/local/bin/clang++)
+          set(CMAKE_C_COMPILER_TARGET ${TRIPLE})
+          set(CMAKE_CXX_COMPILER_TARGET ${TRIPLE})
+          set(CMAKE_EXE_LINKER_FLAGS_INIT "-fuse-ld=lld --target=${TRIPLE}")
+          set(CMAKE_SHARED_LINKER_FLAGS_INIT "-fuse-ld=lld --target=${TRIPLE}")
+          set(CMAKE_FIND_ROOT_PATH "/usr/${TRIPLE};${PREBUILT_PREFIX}")
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          EOF
+
+      - name: Cache xwin Windows SDK + MSVC CRT sysroot (x64 + ARM64, windows-xwin only)
+        if: matrix.target_os == 'windows-xwin'
         id: cache-xwin
         uses: actions/cache@v5
         with:
           path: /home/runner/.cache/xwin
-          key: xwin-msvc-sdk-v2
+          key: xwin-msvc-sdk-multiarch-v1
 
-      - name: Setup xwin Windows SDK + MSVC CRT sysroot (windows-xwin only)
-        if: inputs.target_os == 'windows-xwin' && steps.cache-xwin.outputs.cache-hit != 'true'
+      - name: Setup xwin Windows SDK + MSVC CRT sysroot (x64 + ARM64, windows-xwin only)
+        if: matrix.target_os == 'windows-xwin' && steps.cache-xwin.outputs.cache-hit != 'true'
         run: |
           XWIN_VER="0.6.7"
           curl -fsSL "https://github.com{XWIN_VER}/xwin-${XWIN_VER}-x86_64-unknown-linux-musl.tar.gz" -o /tmp/xwin.tar.gz
           tar -xzf /tmp/xwin.tar.gz -C /tmp
-          "/tmp/xwin-${XWIN_VER}-x86_64-unknown-linux-musl/xwin" --accept-license splat --output "$XWIN_DIR"
+          "/tmp/xwin-${XWIN_VER}-x86_64-unknown-linux-musl/xwin" --accept-license --arch x86_64,aarch64 splat --output "$XWIN_DIR"
           rm -rf /tmp/xwin*
 
-      - name: Generate CMake Windows MSVC cross-compile toolchain file (windows-xwin only)
-        if: inputs.target_os == 'windows-xwin'
+      - name: Generate CMake Windows MSVC cross-compile toolchain file (x86_64 or aarch64)
+        if: matrix.target_os == 'windows-xwin'
         run: |
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            WIN_PROC="ARM64"
+            WIN_TRIPLE="aarch64-pc-windows-msvc"
+          else
+            WIN_PROC="AMD64"
+            WIN_TRIPLE="x86_64-pc-windows-msvc"
+          fi
           cat << EOF > /tmp/windows-msvc-toolchain.cmake
           set(CMAKE_SYSTEM_NAME Windows)
-          set(CMAKE_SYSTEM_PROCESSOR AMD64)
+          set(CMAKE_SYSTEM_PROCESSOR ${WIN_PROC})
           set(CMAKE_C_COMPILER /usr/local/bin/clang)
           set(CMAKE_CXX_COMPILER /usr/local/bin/clang++)
           set(CMAKE_LINKER /usr/local/bin/lld-link)
           set(CMAKE_AR /usr/local/bin/llvm-lib)
           set(CMAKE_RC_COMPILER /usr/local/bin/llvm-rc)
-          set(CMAKE_C_COMPILER_TARGET x86_64-pc-windows-msvc)
-          set(CMAKE_CXX_COMPILER_TARGET x86_64-pc-windows-msvc)
+          set(CMAKE_C_COMPILER_TARGET ${WIN_TRIPLE})
+          set(CMAKE_CXX_COMPILER_TARGET ${WIN_TRIPLE})
           set(CMAKE_C_FLAGS_INIT "-winsysroot ${XWIN_DIR}")
           set(CMAKE_CXX_FLAGS_INIT "-winsysroot ${XWIN_DIR}")
           set(CMAKE_EXE_LINKER_FLAGS_INIT "-winsysroot:${XWIN_DIR}")
@@ -239,16 +315,16 @@ jobs:
           EOF
 
       - name: Restore cached MacOSX.sdk sysroot (macos only)
-        if: inputs.target_os == 'macos'
+        if: matrix.target_os == 'macos'
         uses: actions/cache@v5
         with:
           path: /home/runner/.cache/macos-sdk
           key: macos-sdk-sysroot-v1
 
       - name: Generate CMake macOS Darwin cross-compile toolchain file (macos only)
-        if: inputs.target_os == 'macos'
+        if: matrix.target_os == 'macos'
         run: |
-          ARCH="${{ inputs.macos_arch }}"
+          ARCH="${{ matrix.arch }}"
           TRIPLE="${ARCH}-apple-darwin23.0"
           cat << EOF > /tmp/macos-darwin-toolchain.cmake
           set(CMAKE_SYSTEM_NAME Darwin)
@@ -274,7 +350,7 @@ jobs:
           EOF
 
       - name: Cache Android NDK (android-ndk only)
-        if: inputs.target_os == 'android-ndk'
+        if: matrix.target_os == 'android-ndk'
         id: cache-ndk
         uses: actions/cache@v5
         with:
@@ -282,7 +358,7 @@ jobs:
           key: android-ndk-${{ inputs.ndk_version }}-linux-v1
 
       - name: Download & unpack Android NDK (android-ndk only)
-        if: inputs.target_os == 'android-ndk' && steps.cache-ndk.outputs.cache-hit != 'true'
+        if: matrix.target_os == 'android-ndk' && steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           NDK_VER="${{ inputs.ndk_version }}"
           curl -fsSL "https://google.com{NDK_VER}-linux.zip" -o /tmp/android-ndk.zip
@@ -315,7 +391,7 @@ jobs:
             DIRECT_URL="$GITHUB_SERVER_URL/${REPO}/releases/download/${LLAMA_AGENT_TAG}/${ASSET_NAME}"
             if ! wget --server-response -O "/tmp/${ASSET_NAME}" "$DIRECT_URL" 2>&1; then
               echo "Exact tag $LLAMA_AGENT_TAG not found on $REPO — resolving latest Linux x64 release asset..."
-              LATEST_URL=$(curl -fsSL "https://github.com{REPO}/releases" | jq -r '[.[].assets[] | select(.name | test("(ubuntu|linux).*x64.*\\.(tar\\.gz|zip)$"; "i"))][0].browser_download_url // empty')
+              LATEST_URL=$(curl -fsSL "https://github.com{REPO}/releases" | jq -r '[.[].assets[] | select(.name | test("(ubuntu|linux).*x64.*\\.(tar\\.gz|zip)$"; "i"))].browser_download_url // empty')
               [ -n "$LATEST_URL" ] || { echo "ERROR: No Linux x64 release asset found on $REPO"; exit 1; }
               echo "Downloading latest asset: $LATEST_URL"
               wget -O "/tmp/${ASSET_NAME}" "$LATEST_URL"
@@ -363,7 +439,7 @@ jobs:
             gh release create "$DEPS_RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Incremental Full LLVM + Clang + LLD + LLDB + Runtimes" \
-              --notes "Prebuilt Linux (.a/.so), Windows MSVC (.lib/.dll), Android NDK (.a/.so), and macOS Mach-O (.a/.dylib) LLVM toolchain." \
+              --notes "Prebuilt Linux, Windows MSVC, Android NDK, and macOS Darwin LLVM toolchain + sanitizer runtimes (x86 & ARM)." \
               --prerelease
           fi
 
@@ -414,12 +490,7 @@ jobs:
           done
 
           # 2. Extract transitive LLVM, Clang, LLD & LLDB library targets in topological order
-          # Matches Linux (.a/.so), macOS (.a/.dylib), and Windows MSVC (.lib)
-          TARGETS=$(ninja -C "$BUILD_DIR" -t inputs "${ROOT_TARGETS[@]}" \
-
-            | grep -oE 'lib/(lib)?[A-Za-z0-9_+-]+\.(a|so|lib|dylib)' \
-            | sed -E 's|^lib/(lib)?||; s|\.(a|so|lib|dylib)$||' \
-            | awk '!seen[$0]++')
+          TARGETS=$(ninja -C "$BUILD_DIR" -t inputs "${ROOT_TARGETS[@]}" | grep -oE 'lib/(lib)?[A-Za-z0-9_+-]+\.(a|so|lib|dylib)' | sed -E 's|^lib/(lib)?||; s|\.(a|so|lib|dylib)$||' | awk '!seen[$0]++')
 
           TOTAL=$(printf '%s\n' "$TARGETS" | grep -c . || true)
           echo "Topological dependency queue ($TOTAL LLVM/Clang/LLD/LLDB libraries)"
@@ -472,14 +543,13 @@ jobs:
           EOF
           sudo chmod +x /usr/local/bin/build-incremental.sh
 
-      - name: Run llama-agent full LLVM + Clang + LLD + LLDB + Runtimes build (Slice ${{ inputs.slice }}/${{ inputs.max_slices }})
+      - name: Run llama-agent full LLVM + Clang + LLD + LLDB + Runtimes build (${{ matrix.suite_id }} — Slice ${{ inputs.slice }}/${{ inputs.max_slices }})
         id: run-agent
         continue-on-error: true
         env:
           USER_PROMPT: ${{ inputs.custom_prompt }}
-          TARGET_OS: ${{ inputs.target_os }}
-          MACOS_ARCH: ${{ inputs.macos_arch }}
-          ANDROID_ABI: ${{ inputs.android_abi }}
+          TARGET_OS: ${{ matrix.target_os }}
+          TARGET_ARCH: ${{ matrix.arch }}
           ANDROID_API: ${{ inputs.android_api }}
           LLVM_TAG: ${{ inputs.llvm_tag }}
           LLVM_TARGETS: ${{ inputs.llvm_targets }}
@@ -488,8 +558,10 @@ jobs:
 
           if [ "$TARGET_OS" = "windows-xwin" ]; then
             CMAKE_EXTRA_FLAGS="-DCMAKE_TOOLCHAIN_FILE=/tmp/windows-msvc-toolchain.cmake -DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DCMAKE_C_COMPILER=/usr/local/bin/clang;-DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_ENABLE_RUNTIMES=compiler-rt -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON -DLLDB_ENABLE_PYTHON=OFF -DLLDB_ENABLE_LIBXML2=OFF"
+          elif [ "$TARGET_OS" = "linux-arm" ]; then
+            CMAKE_EXTRA_FLAGS="-DCMAKE_TOOLCHAIN_FILE=/tmp/linux-arm-toolchain.cmake -DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DCMAKE_C_COMPILER=/usr/local/bin/clang;-DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_ENABLE_RUNTIMES=compiler-rt -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON -DLLDB_ENABLE_PYTHON=OFF -DLLDB_ENABLE_LIBXML2=OFF"
           elif [ "$TARGET_OS" = "android-ndk" ]; then
-            CMAKE_EXTRA_FLAGS="-DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake -DANDROID_ABI=$ANDROID_ABI -DANDROID_PLATFORM=android-$ANDROID_API -DANDROID_STL=c++_shared -DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DCMAKE_C_COMPILER=/usr/local/bin/clang;-DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_ENABLE_RUNTIMES=compiler-rt -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON -DLLDB_ENABLE_PYTHON=OFF -DLLDB_ENABLE_LIBXML2=OFF"
+            CMAKE_EXTRA_FLAGS="-DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake -DANDROID_ABI=$TARGET_ARCH -DANDROID_PLATFORM=android-$ANDROID_API -DANDROID_STL=c++_shared -DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DCMAKE_C_COMPILER=/usr/local/bin/clang;-DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_ENABLE_RUNTIMES=compiler-rt -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON -DLLDB_ENABLE_PYTHON=OFF -DLLDB_ENABLE_LIBXML2=OFF"
           elif [ "$TARGET_OS" = "macos" ]; then
             CMAKE_EXTRA_FLAGS="-DCMAKE_TOOLCHAIN_FILE=/tmp/macos-darwin-toolchain.cmake -DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DCMAKE_C_COMPILER=/usr/local/bin/clang;-DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_ENABLE_RUNTIMES=compiler-rt -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON -DCOMPILER_RT_ENABLE_IOS=OFF -DCOMPILER_RT_ENABLE_WATCHOS=OFF -DCOMPILER_RT_ENABLE_TVOS=OFF -DLLDB_ENABLE_PYTHON=OFF -DLLDB_ENABLE_LIBXML2=OFF -DLLDB_USE_SYSTEM_DEBUGSERVER=ON"
           else
@@ -500,7 +572,7 @@ jobs:
             FINAL_PROMPT="$USER_PROMPT"
           else
             FINAL_PROMPT=$(cat << EOF
-          Build the complete LLVM + Clang + LLD + LLDB + Compiler-RT (ASan/UBSan/TSan/Builtins) library and header suite incrementally into $PREBUILT_PREFIX (target OS: $TARGET_OS):
+          Build the complete LLVM + Clang + LLD + LLDB + Compiler-RT (ASan/UBSan/TSan/Builtins) library and header suite incrementally into $PREBUILT_PREFIX (target OS: $TARGET_OS, arch: $TARGET_ARCH):
           1. If /tmp/llvm-src does not exist, run: git clone --depth 1 --branch $LLVM_TAG https://github.com /tmp/llvm-src
           2. Configure the full toolchain with CMake + Ninja + ccache into /tmp/llvm-build:
              cmake -S /tmp/llvm-src/llvm -B /tmp/llvm-build -G Ninja -DCMAKE_BUILD_TYPE=Release $CMAKE_EXTRA_FLAGS -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_INSTALL_PREFIX=$PREBUILT_PREFIX -DLLVM_ENABLE_PROJECTS="clang;lld;lldb" -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS" -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_TOOLS=OFF -DLLVM_INCLUDE_UTILS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF -DCLANG_BUILD_TOOLS=OFF -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF -DLLD_BUILD_TOOLS=OFF -DLLDB_INCLUDE_TESTS=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_TERMINFO=OFF
@@ -526,22 +598,19 @@ jobs:
             --threads 4 \
             --ctx-size "${{ steps.model.outputs.ctx }}" \
             -n 8192 \
-            2>&1 | tee "inc-agent-slice-${{ inputs.slice }}.log"
+            2>&1 | tee "inc-agent-${{ matrix.suite_id }}-slice-${{ inputs.slice }}.log"
 
-      - name: Upload checkpoint & auto-dispatch next slice if needed
+      - name: Upload checkpoint & auto-dispatch next slice for ${{ matrix.suite_id }} if needed
         id: checkpoint
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TARGET_OS="${{ inputs.target_os }}"
+          SUITE_ID="${{ matrix.suite_id }}"
           KEY_PREFIX="${{ steps.model.outputs.key_prefix }}"
           SLICE="${{ inputs.slice }}"
           MAX_SLICES="${{ inputs.max_slices }}"
           ALL_DONE=$(cat /tmp/inc-status/done 2>/dev/null || echo "false")
-
-          echo "all_done=$ALL_DONE" >> "$GITHUB_OUTPUT"
-          echo "artifact_prefix=$KEY_PREFIX" >> "$GITHUB_OUTPUT"
 
           CUR_LIBS=$(find "$PREBUILT_PREFIX/lib" -type f \( -name "*.a" -o -name "*.lib" -o -name "*.so*" -o -name "*.dll" -o -name "*.dylib" \) 2>/dev/null | wc -l)
           CUR_CCACHE=$(ccache -s 2>/dev/null | awk '/files in cache/ {print $NF+0}' | tail -n 1)
@@ -561,36 +630,34 @@ jobs:
           fi
 
           {
-            echo "## Incremental Full LLVM + Clang + LLD + LLDB + Runtimes Summary — Slice $SLICE / $MAX_SLICES (\`$KEY_PREFIX\`)"
-            echo "- **Target OS:** \`$TARGET_OS\` | **Architectures:** \`${{ inputs.llvm_targets }}\` | **Model:** \`${{ inputs.model_choice }}\` | **Completed:** \`$ALL_DONE\`"
+            echo "## Incremental Full LLVM + Clang + LLD + LLDB + Runtimes — \`$SUITE_ID\` (Slice $SLICE / $MAX_SLICES)"
+            echo "- **Architectures:** \`${{ inputs.llvm_targets }}\` | **Model:** \`${{ inputs.model_choice }}\` | **Completed:** \`$ALL_DONE\`"
             echo "- **Cached Libraries & Runtimes:** \`$CUR_LIBS\` total (+\`$NEW_LIBS\` this slice)"
             echo "- **CCache Objects:** \`${CUR_CCACHE:-0}\` total (+\`$NEW_OBJS\` this slice)"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$ALL_DONE" = "true" ]; then
-            echo "Build 100% complete! Published ${KEY_PREFIX}-prebuilt.tar.gz to $DEPS_RELEASE_TAG."
+            echo "Build 100% complete for $SUITE_ID! Published ${KEY_PREFIX}-prebuilt.tar.gz to $DEPS_RELEASE_TAG."
             exit 0
           fi
 
           if [ "$NEW_LIBS" -le 0 ] && [ "$NEW_OBJS" -le 0 ]; then
-            echo "ERROR: Zero forward progress in slice $SLICE (0 new libs, 0 new ccache objects) — aborting to prevent infinite loop."
+            echo "ERROR: Zero forward progress for $SUITE_ID in slice $SLICE (0 new libs, 0 new ccache objects) — aborting to prevent infinite loop."
             exit 1
           fi
 
           if [ "$SLICE" -ge "$MAX_SLICES" ]; then
-            echo "ERROR: Reached MAX_SLICES ($MAX_SLICES) with $CUR_LIBS libraries cached — stopping."
+            echo "ERROR: Reached MAX_SLICES ($MAX_SLICES) for $SUITE_ID with $CUR_LIBS libraries cached — stopping."
             exit 1
           fi
 
           NEXT_SLICE=$((SLICE + 1))
-          echo "Progress verified (+$NEW_LIBS libs, +$NEW_OBJS ccache objs). Dispatching slice $NEXT_SLICE..."
+          echo "Progress verified for $SUITE_ID (+$NEW_LIBS libs, +$NEW_OBJS ccache objs). Dispatching slice $NEXT_SLICE..."
           gh workflow run "llvm-clang-toolchain.yaml" \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$GITHUB_REF_NAME" \
             -f model_choice="${{ inputs.model_choice }}" \
-            -f target_os="$TARGET_OS" \
-            -f macos_arch="${{ inputs.macos_arch }}" \
-            -f android_abi="${{ inputs.android_abi }}" \
+            -f target_suite="$SUITE_ID" \
             -f android_api="${{ inputs.android_api }}" \
             -f ndk_version="${{ inputs.ndk_version }}" \
             -f llvm_tag="${{ inputs.llvm_tag }}" \
@@ -599,34 +666,165 @@ jobs:
             -f slice="$NEXT_SLICE" \
             -f max_slices="$MAX_SLICES"
 
-  # Job 3A: Native Windows verification (links LLVM + Clang + LLD + X86/ARM/AArch64/Mips via CMake & runs CTest)
-  verify-windows:
+  # Job 2A: Linux verification across x86_64, arm64 (QEMU), and armhf (QEMU)
+  verify-linux:
     needs: incremental-build
-    if: inputs.target_os == 'windows-xwin' && needs.incremental-build.outputs.all_done == 'true'
-    runs-on: windows-latest
+    if: always() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'linux-all' || startsWith(inputs.target_suite, 'linux-'))
+    runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite_id: linux-x86_64
+            arch: x86_64
+            triple: x86_64-linux-gnu
+            qemu: ''
+          - suite_id: linux-arm64
+            arch: aarch64
+            triple: aarch64-linux-gnu
+            qemu: qemu-aarch64-static
+          - suite_id: linux-armhf
+            arch: armhf
+            triple: arm-linux-gnueabihf
+            qemu: qemu-arm-static
 
     steps:
+      - name: Check if ${{ matrix.suite_id }} prebuilt release asset is published
+        id: check-asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSETS=$(gh release view "$DEPS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
+          if echo "$ASSETS" | grep -qx "llvm-suite-full-${{ matrix.suite_id }}-prebuilt.tar.gz"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Clang 22, ARM cross-sysroots & QEMU user-mode emulator (for ARM tests)
+        if: steps.check-asset.outputs.ready == 'true'
+        run: |
+          curl -fsSL https://llvm.org | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://llvm.org llvm-toolchain-noble-22 main" | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          sudo apt-get update
+          sudo apt-get install -y clang-22 lld-22 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static
+
+      - name: Download prebuilt ${{ matrix.suite_id }} archive & execute CTest (native or via QEMU)
+        if: steps.check-asset.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$PREBUILT_PREFIX" /tmp/linux-smoke
+          gh release download "$DEPS_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "llvm-suite-full-${{ matrix.suite_id }}-prebuilt.tar.gz" \
+            --dir /tmp
+          tar -xzf "/tmp/llvm-suite-full-${{ matrix.suite_id }}-prebuilt.tar.gz" -C "$PREBUILT_PREFIX"
+
+          cat << 'EOF' > /tmp/linux-smoke/CMakeLists.txt
+          cmake_minimum_required(VERSION 3.20)
+          project(linux_llvm_suite_smoke LANGUAGES C CXX)
+          set(CMAKE_CXX_STANDARD 20)
+          find_package(LLVM REQUIRED CONFIG)
+          find_package(Clang REQUIRED CONFIG)
+          find_package(LLD REQUIRED CONFIG)
+          llvm_map_components_to_libnames(LLVM_LIBS
+            Support MC MCDisassembler
+            X86Disassembler X86Desc X86Info
+            ARMDisassembler ARMDesc ARMInfo
+            AArch64Disassembler AArch64Desc AArch64Info
+            MipsDisassembler MipsDesc MipsInfo
+          )
+          add_executable(smoke main.cpp)
+          target_include_directories(smoke PRIVATE ${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS} ${LLD_INCLUDE_DIRS})
+          target_compile_definitions(smoke PRIVATE ${LLVM_DEFINITIONS})
+          target_link_libraries(smoke PRIVATE ${LLVM_LIBS} clangBasic lldCommon)
+          EOF
+
+          cat << 'EOF' > /tmp/linux-smoke/main.cpp
+          #include <iostream>
+          #include "llvm/Support/TargetSelect.h"
+          #include "clang/Basic/Version.h"
+          int main() {
+              llvm::InitializeAllTargetInfos();
+              llvm::InitializeAllTargetMCs();
+              llvm::InitializeAllDisassemblers();
+              std::cout << "Linux (${{ matrix.suite_id }}) LLVM (X86/ARM/AArch64/Mips) + " << clang::getClangFullVersion() << " executed cleanly!\n";
+              return 0;
+          }
+          EOF
+
+          EXTRA_CMAKE=""
+          if [ -n "${{ matrix.qemu }}" ]; then
+            EXTRA_CMAKE="-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.arch }} -DCMAKE_C_COMPILER_TARGET=${{ matrix.triple }} -DCMAKE_CXX_COMPILER_TARGET=${{ matrix.triple }} -DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld -DCMAKE_FIND_ROOT_PATH=/usr/${{ matrix.triple }};$PREBUILT_PREFIX"
+          fi
+
+          cmake -S /tmp/linux-smoke -B /tmp/linux-smoke/build -G Ninja \
+            -DCMAKE_C_COMPILER=clang-22 \
+            -DCMAKE_CXX_COMPILER=clang++-22 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$PREBUILT_PREFIX" \
+            $EXTRA_CMAKE
+          cmake --build /tmp/linux-smoke/build
+          file /tmp/linux-smoke/build/smoke
+          if [ -n "${{ matrix.qemu }}" ]; then
+            ${{ matrix.qemu }} -L "/usr/${{ matrix.triple }}" /tmp/linux-smoke/build/smoke
+          else
+            /tmp/linux-smoke/build/smoke
+          fi
+
+  # Job 2B: Native Windows verification across x86_64 (windows-latest) and ARM64 (windows-11-arm)
+  verify-windows:
+    needs: incremental-build
+    if: always() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'windows-all' || startsWith(inputs.target_suite, 'windows-'))
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite_id: windows-x86_64
+            runner: windows-latest
+          - suite_id: windows-arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check if ${{ matrix.suite_id }} prebuilt release asset is published
+        id: check-asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $assets = gh release view "${{ env.DEPS_RELEASE_TAG }}" --repo "${{ github.repository }}" --json assets -q ".assets[].name" 2>$null
+          if ($assets -contains "llvm-suite-full-${{ matrix.suite_id }}-prebuilt.tar.gz") {
+            echo "ready=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "ready=false" >> $env:GITHUB_OUTPUT
+          }
+
       - name: Exclude cache & build folders from Windows Defender
+        if: steps.check-asset.outputs.ready == 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "C:/Users/runneradmin/.cache/prebuilt-deps" | Out-Null
           Add-MpPreference -ExclusionPath "C:\Users\runneradmin\.cache"
           Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
-      - name: Download cross-compiled Windows MSVC LLVM suite archive from Release
+      - name: Download cross-compiled Windows ${{ matrix.suite_id }} archive from Release
+        if: steps.check-asset.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $prefix = "${{ needs.incremental-build.outputs.artifact_prefix }}"
           gh release download "${{ env.DEPS_RELEASE_TAG }}" `
             --repo "${{ github.repository }}" `
-            --pattern "${prefix}-prebuilt.tar.gz" `
+            --pattern "llvm-suite-full-${{ matrix.suite_id }}-prebuilt.tar.gz" `
             --dir C:/Users/runneradmin/.cache
-          tar -xzf "C:/Users/runneradmin/.cache/${prefix}-prebuilt.tar.gz" -C C:/Users/runneradmin/.cache/prebuilt-deps
+          tar -xzf "C:/Users/runneradmin/.cache/llvm-suite-full-${{ matrix.suite_id }}-prebuilt.tar.gz" -C C:/Users/runneradmin/.cache/prebuilt-deps
 
-      - name: Run native Windows clang-cl + LLD + Multi-Arch CTest smoke test
+      - name: Run native Windows (${{ matrix.suite_id }}) clang-cl + LLD + CTest smoke test
+        if: steps.check-asset.outputs.ready == 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path C:/win-smoke-test | Out-Null
@@ -656,12 +854,11 @@ jobs:
           #include <iostream>
           #include "llvm/Support/TargetSelect.h"
           #include "clang/Basic/Version.h"
-          #include "lld/Common/Driver.h"
           int main() {
               llvm::InitializeAllTargetInfos();
               llvm::InitializeAllTargetMCs();
               llvm::InitializeAllDisassemblers();
-              std::cout << "Windows native LLVM (X86/ARM/AArch64/Mips) + " << clang::getClangFullVersion() << " + LLD linked & executed cleanly!\n";
+              std::cout << "Windows (${{ matrix.suite_id }}) LLVM (X86/ARM/AArch64/Mips) + " << clang::getClangFullVersion() << " executed cleanly!\n";
               return 0;
           }
           '@ | Set-Content -Path C:/win-smoke-test/main.cpp
@@ -675,33 +872,51 @@ jobs:
           cmake --build C:/win-smoke-test/build
           ctest --test-dir C:/win-smoke-test/build --output-on-failure
 
-  # Job 3B: Android NDK verification (links cross-compiled Android LLVM + Clang + LLD + Multi-Arch libraries)
+  # Job 2C: Android NDK verification across all 4 ABIs
   verify-android:
     needs: incremental-build
-    if: inputs.target_os == 'android-ndk' && needs.incremental-build.outputs.all_done == 'true'
+    if: always() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'android-all' || startsWith(inputs.target_suite, 'android-'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86_64, x86]
 
     steps:
+      - name: Check if Android ${{ matrix.abi }} prebuilt release asset is published
+        id: check-asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSETS=$(gh release view "$DEPS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
+          if echo "$ASSETS" | grep -qx "llvm-suite-full-android-${{ matrix.abi }}-prebuilt.tar.gz"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Restore Android NDK cache
+        if: steps.check-asset.outputs.ready == 'true'
         uses: actions/cache@v5
         with:
           path: /home/runner/.cache/android-ndk
           key: android-ndk-${{ inputs.ndk_version }}-linux-v1
 
-      - name: Download prebuilt Android LLVM suite archive from Release
+      - name: Download prebuilt Android ${{ matrix.abi }} LLVM suite archive from Release
+        if: steps.check-asset.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PREFIX="${{ needs.incremental-build.outputs.artifact_prefix }}"
           mkdir -p "$PREBUILT_PREFIX" /tmp/android-smoke
           gh release download "$DEPS_RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "${PREFIX}-prebuilt.tar.gz" \
+            --pattern "llvm-suite-full-android-${{ matrix.abi }}-prebuilt.tar.gz" \
             --dir /tmp
-          tar -xzf "/tmp/${PREFIX}-prebuilt.tar.gz" -C "$PREBUILT_PREFIX"
+          tar -xzf "/tmp/llvm-suite-full-android-${{ matrix.abi }}-prebuilt.tar.gz" -C "$PREBUILT_PREFIX"
 
-      - name: Cross-compile & link Android NDK multi-arch smoke binary
+      - name: Cross-compile & link Android ${{ matrix.abi }} smoke binary
+        if: steps.check-asset.outputs.ready == 'true'
         run: |
           cat << 'EOF' > /tmp/android-smoke/CMakeLists.txt
           cmake_minimum_required(VERSION 3.20)
@@ -738,7 +953,7 @@ jobs:
 
           cmake -S /tmp/android-smoke -B /tmp/android-smoke/build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI="${{ inputs.android_abi }}" \
+            -DANDROID_ABI="${{ matrix.abi }}" \
             -DANDROID_PLATFORM="android-${{ inputs.android_api }}" \
             -DANDROID_STL=c++_shared \
             -DCMAKE_BUILD_TYPE=Release \
@@ -747,30 +962,48 @@ jobs:
           cmake --build /tmp/android-smoke/build
           file /tmp/android-smoke/build/smoke
 
-  # Job 3C: Native macOS verification (links Linux-cross-compiled Mach-O LLVM + Clang + LLD & runs CTest on macos-latest)
+  # Job 2D: Native macOS verification across arm64 and x86_64 on macos-latest
   verify-macos:
     needs: incremental-build
-    if: inputs.target_os == 'macos' && needs.incremental-build.outputs.all_done == 'true'
+    if: always() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'macos-all' || startsWith(inputs.target_suite, 'macos-'))
     runs-on: macos-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
 
     steps:
-      - name: Install Ninja if missing
-        run: command -v ninja >/dev/null 2>&1 || brew install ninja
-
-      - name: Download cross-compiled macOS Mach-O LLVM suite archive from Release
+      - name: Check if macOS ${{ matrix.arch }} prebuilt release asset is published
+        id: check-asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PREFIX="${{ needs.incremental-build.outputs.artifact_prefix }}"
+          ASSETS=$(gh release view "$DEPS_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
+          if echo "$ASSETS" | grep -qx "llvm-suite-full-macos-${{ matrix.arch }}-prebuilt.tar.gz"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Ninja if missing
+        if: steps.check-asset.outputs.ready == 'true'
+        run: command -v ninja >/dev/null 2>&1 || brew install ninja
+
+      - name: Download cross-compiled macOS ${{ matrix.arch }} LLVM suite archive from Release
+        if: steps.check-asset.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           mkdir -p /Users/runner/.cache/prebuilt-deps /tmp/macos-smoke
           gh release download "$DEPS_RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern "${PREFIX}-prebuilt.tar.gz" \
+            --pattern "llvm-suite-full-macos-${{ matrix.arch }}-prebuilt.tar.gz" \
             --dir /tmp
-          tar -xzf "/tmp/${PREFIX}-prebuilt.tar.gz" -C /Users/runner/.cache/prebuilt-deps
+          tar -xzf "/tmp/llvm-suite-full-macos-${{ matrix.arch }}-prebuilt.tar.gz" -C /Users/runner/.cache/prebuilt-deps
 
-      - name: Compile, link & run native macOS Mach-O CTest smoke binary
+      - name: Compile, link & run native macOS ${{ matrix.arch }} CTest smoke binary
+        if: steps.check-asset.outputs.ready == 'true'
         run: |
           cat << 'EOF' > /tmp/macos-smoke/CMakeLists.txt
           cmake_minimum_required(VERSION 3.20)
@@ -802,14 +1035,14 @@ jobs:
               llvm::InitializeAllTargetInfos();
               llvm::InitializeAllTargetMCs();
               llvm::InitializeAllDisassemblers();
-              std::cout << "macOS native LLVM (X86/ARM/AArch64/Mips) + " << clang::getClangFullVersion() << " linked & executed cleanly!\n";
+              std::cout << "macOS native (${{ matrix.arch }}) LLVM (X86/ARM/AArch64/Mips) + " << clang::getClangFullVersion() << " executed cleanly!\n";
               return 0;
           }
           EOF
 
           cmake -S /tmp/macos-smoke -B /tmp/macos-smoke/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="${{ inputs.macos_arch }}" \
+            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.arch }}" \
             -DCMAKE_PREFIX_PATH="/Users/runner/.cache/prebuilt-deps"
           cmake --build /tmp/macos-smoke/build
           file /tmp/macos-smoke/build/smoke

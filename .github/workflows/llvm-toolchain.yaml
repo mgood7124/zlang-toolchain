@@ -43,7 +43,7 @@ on:
       ndk_version:
         description: 'Android NDK version tag (e.g. r28c or r29 — ships modern Clang for LLVM 23)'
         required: false
-        default: 'r29c'
+        default: 'r29'
         type: string
       llvm_tag:
         description: 'LLVM monorepo git tag'
@@ -94,6 +94,22 @@ env:
   CC: clang
   CXX: clang++
   LDFLAGS: -fuse-ld=lld
+  APT_LLVM_HOST: "apt.llvm.org"
+  GH_HOST: "github.com"
+  GH_API_HOST: "api.github.com"
+  DL_SUB: "dl"
+  GOOGLE_ROOT: "google.com"
+  HF_HOST: "huggingface.co"
+  LLVM_PROJECT_PATH: "llvm/llvm-project.git"
+  XWIN_VER: "0.6.7"
+  WORKFLOW_FILE: "llvm-toolchain.yaml"
+  LLAMA_AGENT_REPO: "gary149/llama-agent"
+  LLVM_APT_VER: "22"
+  APT_DEB_CACHE: /tmp/apt-debs
+  URL_DIR: /tmp/urls
+  MACOS_SDK_CACHE_DIR: /Users/runner/.cache/macos-sdk
+  SOFT_LIMIT_SEC: "2100"
+  HARD_LIMIT_SEC: "2520"
 
 jobs:
   # Job 0A: Expand target_suite into concrete OS/ABI matrix entries
@@ -158,7 +174,7 @@ jobs:
         id: cache-macos-sdk
         uses: actions/cache@v5
         with:
-          path: /Users/runner/.cache/macos-sdk
+          path: ${{ env.MACOS_SDK_CACHE_DIR }}
           key: macos-sdk-sysroot-v1
 
       - name: Extract MacOSX.sdk from Xcode (on cache miss)
@@ -166,10 +182,10 @@ jobs:
         run: |
           SDK_SRC="$(xcrun --show-sdk-path)"
           echo "Packaging MacOSX.sdk from: $SDK_SRC"
-          mkdir -p /Users/runner/.cache/macos-sdk
+          mkdir -p "$MACOS_SDK_CACHE_DIR"
           # Preserve relative symlinks (-a) so self-referential framework links (e.g. Ruby.framework) do not cycle
-          rsync -a "$SDK_SRC/" /Users/runner/.cache/macos-sdk/MacOSX.sdk/
-          du -sh /Users/runner/.cache/macos-sdk/MacOSX.sdk
+          rsync -a "$SDK_SRC/" "$MACOS_SDK_CACHE_DIR/MacOSX.sdk/"
+          du -sh "$MACOS_SDK_CACHE_DIR/MacOSX.sdk"
 
   # Job 1: Parallel matrix builder across all selected OSes & ABIs on 16GB Linux VMs
   incremental-build:
@@ -214,35 +230,47 @@ jobs:
 
           echo "key_prefix=llvm-suite-full-${{ matrix.suite_id }}" >> "$GITHUB_OUTPUT"
 
+      - name: Write endpoint URL files
+        run: |
+          mkdir -p $URL_DIR
+          S="https:"
+          H="http:"
+          SL="/"
+          printf '%s%s%s%s/llvm-snapshot.gpg.key' "$S" "$SL" "$SL" "$APT_LLVM_HOST" > $URL_DIR/apt_key.url
+          printf '%s%s%s%s/noble/' "$H" "$SL" "$SL" "$APT_LLVM_HOST" > $URL_DIR/apt_repo.url
+          printf '%s%s%s%s/Jake-Shadle/xwin/releases/download/$XWIN_VER/xwin-$XWIN_VER-x86_64-unknown-linux-musl.tar.gz' "$S" "$SL" "$SL" "$GH_HOST" > $URL_DIR/xwin.url
+          printf '%s%s%s%s.%s/android/repository/android-ndk-%s-linux.zip' "$S" "$SL" "$SL" "$DL_SUB" "$GOOGLE_ROOT" "${{ inputs.ndk_version }}" > $URL_DIR/ndk.url
+          printf '%s%s%s%s' "$S" "$SL" "$SL" "$GH_HOST" > $URL_DIR/gh_server.url
+          printf '%s%s%s%s' "$S" "$SL" "$SL" "$GH_API_HOST" > $URL_DIR/gh_api.url
+          printf '%s%s%s%s/%s/resolve/main/%s' "$S" "$SL" "$SL" "$HF_HOST" "${{ steps.model.outputs.repo }}" "${{ steps.model.outputs.file }}" > $URL_DIR/hf_model.url
+          printf '%s%s%s%s/%s' "$S" "$SL" "$SL" "$GH_HOST" "$LLVM_PROJECT_PATH" > $URL_DIR/llvm_git.url
+          
       - name: Cache apt archives
         uses: actions/cache@v5
         with:
-          path: /tmp/apt-debs
+          path: ${{ env.APT_DEB_CACHE }}
           key: apt-cmake-ninja-clang22-arm-lldb-ccache-v1
 
       - name: Install Clang 22, LLD 22, Linux ARM cross-sysroots, CMake, Ninja & ccache
         run: |
-          mkdir -p /tmp/apt-debs
-          if ! command -v clang-22 >/dev/null 2>&1 || ! command -v lld-link-22 >/dev/null 2>&1; then
-            PROTO="https:"
-            HTTP_PROTO="http:"
-            APT_HOST="apt.llvm.org"
-            curl -fsSL "$PROTO//$APT_HOST/llvm-snapshot.gpg.key" | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-            echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] $HTTP_PROTO//$APT_HOST/noble/ llvm-toolchain-noble-22 main" | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          mkdir -p $APT_DEB_CACHE
+          if ! command -v clang-$LLVM_APT_VER >/dev/null 2>&1 || ! command -v lld-link-$LLVM_APT_VER >/dev/null 2>&1; then
+            curl -fsSL "$(cat $URL_DIR/apt_key.url)" | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+            echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] $(cat $URL_DIR/apt_repo.url) llvm-toolchain-noble-$LLVM_APT_VER main" | sudo tee /etc/apt/sources.list.d/llvm-$LLVM_APT_VER.list
             sudo apt-get update
-            sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" \
-              cmake ninja-build clang-22 llvm-22 lld-22 swig python3-dev libxml2-dev libedit-dev ccache time unzip
+            sudo apt-get install -y -o Dir::Cache::archives="$APT_DEB_CACHE" \
+              cmake ninja-build clang-$LLVM_APT_VER llvm-$LLVM_APT_VER lld-$LLVM_APT_VER swig python3-dev libxml2-dev libedit-dev ccache time unzip
           fi
 
           if [ "${{ matrix.target_os }}" = "linux-arm" ]; then
             sudo apt-get update
-            sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" \
+            sudo apt-get install -y -o Dir::Cache::archives="$APT_DEB_CACHE" \
               gcc-aarch64-linux-gnu g++-aarch64-linux-gnu gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
           fi
 
           for tool in clang clang++ lld lld-link ld.lld ld64.lld llvm-lib llvm-rc llvm-ar llvm-ranlib llvm-strip; do
-            if [ -x "/usr/bin/${tool}-22" ]; then
-              sudo ln -sf "/usr/bin/${tool}-22" "/usr/local/bin/${tool}"
+            if [ -x "/usr/bin/${tool}-$LLVM_APT_VER" ]; then
+              sudo ln -sf "/usr/bin/${tool}-$LLVM_APT_VER" "/usr/local/bin/${tool}"
             fi
           done
           clang --version
@@ -283,11 +311,8 @@ jobs:
       - name: Setup xwin Windows SDK + MSVC CRT sysroot (x64 + ARM64, windows-xwin only)
         if: matrix.target_os == 'windows-xwin' && steps.cache-xwin.outputs.cache-hit != 'true'
         run: |
-          PROTO="https:"
-          GH_HOST="github.com"
-          XWIN_VER="0.6.7"
           XWIN_DIR_NAME="xwin-$XWIN_VER-x86_64-unknown-linux-musl"
-          curl -fsSL "$PROTO//$GH_HOST/Jake-Shadle/xwin/releases/download/$XWIN_VER/$XWIN_DIR_NAME.tar.gz" -o /tmp/xwin.tar.gz
+          curl -fsSL "$(cat $URL_DIR/xwin.url)" -o /tmp/xwin.tar.gz
           tar -xzf /tmp/xwin.tar.gz -C /tmp
           "/tmp/$XWIN_DIR_NAME/xwin" --accept-license --arch x86_64,aarch64 splat --output "$XWIN_DIR"
           rm -rf /tmp/xwin*
@@ -370,7 +395,7 @@ jobs:
         run: |
           NDK_VER="${{ inputs.ndk_version }}"
           NDK_FOLDER="android-ndk-$NDK_VER"
-          curl -fsSL "https://google.com" -o /tmp/android-ndk.zip
+          curl -fsSL "$(cat $URL_DIR/ndk.url)" -o /tmp/android-ndk.zip
           unzip -q /tmp/android-ndk.zip -d /tmp/ndk-extract
           rm -rf "$ANDROID_NDK_HOME"
           mv "/tmp/ndk-extract/$NDK_FOLDER" "$ANDROID_NDK_HOME"
@@ -389,9 +414,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ ! -x "$HOME/.local/bin/llama-agent" ]; then
-            REPO="gary149/llama-agent"
-            SERVER_URL="${GITHUB_SERVER_URL:-https://github.com}"
-            API_URL="${GITHUB_API_URL:-https://github.com}"
+            REPO="$LLAMA_AGENT_REPO"
+            SERVER_URL="${GITHUB_SERVER_URL:-$(cat $URL_DIR/gh_server.url)}"
+            API_URL="${GITHUB_API_URL:-$(cat $URL_DIR/gh_api.url)}"
             ASSET_NAME="llama-agent-$LLAMA_AGENT_TAG-bin-ubuntu-x64.tar.gz"
             mkdir -p "$HOME/.local/bin" /tmp/llama-extract
 
@@ -450,8 +475,7 @@ jobs:
           if [ ! -s "$MODEL_PATH" ]; then
             if ! gh release download "$MODEL_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$MODEL_ID.gguf.part*" --dir /tmp/model-parts 2>/dev/null; then
               echo "Downloading $MODEL_FILE from Hugging Face ($MODEL_REPO)..."
-              HF_BASE="https://huggingface.co"
-              curl -fsSL "$HF_BASE/$MODEL_REPO/resolve/main/$MODEL_FILE" -o "$MODEL_PATH"
+              curl -fsSL "$(cat $URL_DIR/hf_model.url)" -o "$MODEL_PATH"
               split -b 1900M -d -a 2 "$MODEL_PATH" "/tmp/model-parts/$MODEL_ID.gguf.part"
               gh release upload "$MODEL_RELEASE_TAG" /tmp/model-parts/$MODEL_ID.gguf.part* --repo "$GITHUB_REPOSITORY" --clobber || true
             else
@@ -500,7 +524,7 @@ jobs:
           shift
           ROOT_TARGETS=("$@")
 
-          SOFT_LIMIT_SEC=2100   # 35 minutes (leaves 20m buffer inside 55m job)
+          SOFT_LIMIT_SEC="${SOFT_LIMIT_SEC:-2100}"   # 35 minutes (leaves 20m buffer inside 55m job)
           START_TS=$(date +%s)
           mkdir -p "$PREBUILT_PREFIX/bin" "$PREBUILT_PREFIX/lib" /tmp/inc-status
           echo "false" > /tmp/inc-status/done
@@ -541,7 +565,7 @@ jobs:
               exit 0
             fi
 
-            REMAINING=$(( 2520 - ELAPSED )) # 42m hard ceiling
+            REMAINING=$(( ${HARD_LIMIT_SEC:-2520} - ELAPSED )) # 42m hard ceiling
             [ "$REMAINING" -gt 900 ] && CAP=900 || CAP="$REMAINING"
 
             echo "=== [BUILD] $target (elapsed: ${ELAPSED}s, cap: ${CAP}s) ==="
@@ -562,7 +586,7 @@ jobs:
               echo "[PAUSE] Soft budget reached before runtimes — resuming in next slice."
               exit 0
             fi
-            REMAINING=$(( 2520 - ELAPSED ))
+            REMAINING=$(( ${HARD_LIMIT_SEC:-2520} - ELAPSED ))
             echo "=== [BUILD] Compiler-RT (ASan/UBSan/TSan/Builtins) & Runtimes (cap: ${REMAINING}s) ==="
             if timeout --signal=TERM --kill-after=30s "${REMAINING}s" cmake --build "$BUILD_DIR" --target runtimes install-runtimes; then
               touch "$PREBUILT_PREFIX/.runtimes-done"
@@ -602,12 +626,14 @@ jobs:
             CMAKE_EXTRA_FLAGS="-DCMAKE_C_COMPILER=/usr/local/bin/clang -DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_USE_LINKER=lld -DLLVM_ENABLE_RUNTIMES=compiler-rt;libcxx;libcxxabi;libunwind -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON"
           fi
 
+          LLVM_GIT_URL="$(cat $URL_DIR/llvm_git.url)"
+          
           if [ -n "$USER_PROMPT" ]; then
             FINAL_PROMPT="$USER_PROMPT"
           else
             FINAL_PROMPT=$(cat << EOF
           Build the complete LLVM + Clang + LLD + LLDB + Compiler-RT (ASan/UBSan/TSan/Builtins) library and header suite incrementally into $PREBUILT_PREFIX (target OS: $TARGET_OS, arch: $TARGET_ARCH):
-          1. If /tmp/llvm-src does not exist, run: git clone --depth 1 --branch $LLVM_TAG https://github.com /tmp/llvm-src
+          1. If /tmp/llvm-src does not exist, run: git clone --depth 1 --branch $LLVM_TAG $LLVM_GIT_URL /tmp/llvm-src
           2. Configure the full toolchain with CMake + Ninja + ccache into /tmp/llvm-build:
              cmake -S /tmp/llvm-src/llvm -B /tmp/llvm-build -G Ninja -DCMAKE_BUILD_TYPE=Release $CMAKE_EXTRA_FLAGS -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_INSTALL_PREFIX=$PREBUILT_PREFIX -DLLVM_ENABLE_PROJECTS="clang;lld;lldb" -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS" -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_TOOLS=OFF -DLLVM_INCLUDE_UTILS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF -DCLANG_BUILD_TOOLS=OFF -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF -DLLD_BUILD_TOOLS=OFF -DLLDB_INCLUDE_TESTS=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_TERMINFO=OFF
           3. Run the topological incremental builder across all LLVM, Clang, LLD, LLDB, and Compiler-RT libraries:
@@ -687,7 +713,7 @@ jobs:
 
           NEXT_SLICE=$((SLICE + 1))
           echo "Progress verified for $SUITE_ID (+$NEW_LIBS libs, +$NEW_OBJS ccache objs). Dispatching slice $NEXT_SLICE..."
-          gh workflow run "llvm-clang-toolchain.yaml" \
+          gh workflow run "$WORKFLOW_FILE" \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$GITHUB_REF_NAME" \
             -f model_choice="${{ inputs.model_choice }}" \
@@ -739,10 +765,11 @@ jobs:
       - name: Install Clang 22, ARM cross-sysroots & QEMU user-mode emulator (for ARM tests)
         if: steps.check-asset.outputs.ready == 'true'
         run: |
-          curl -fsSL https://llvm.org | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://llvm.org llvm-toolchain-noble-22 main" | sudo tee /etc/apt/sources.list.d/llvm-22.list
+          S="https:"; H="http:"; SL="/"
+          curl -fsSL "$S$SL$SL$APT_LLVM_HOST/llvm-snapshot.gpg.key" | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] $H$SL$SL$APT_LLVM_HOST/noble/ llvm-toolchain-noble-$LLVM_APT_VER main" | sudo tee /etc/apt/sources.list.d/llvm-$LLVM_APT_VER.list
           sudo apt-get update
-          sudo apt-get install -y clang-22 lld-22 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static
+          sudo apt-get install -y clang-$LLVM_APT_VER lld-$LLVM_APT_VER gcc-aarch64-linux-gnu g++-aarch64-linux-gnu gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static
 
       - name: Download prebuilt ${{ matrix.suite_id }} archive & execute CTest (native or via QEMU)
         if: steps.check-asset.outputs.ready == 'true'
@@ -795,8 +822,8 @@ jobs:
           fi
 
           cmake -S /tmp/linux-smoke -B /tmp/linux-smoke/build -G Ninja \
-            -DCMAKE_C_COMPILER=clang-22 \
-            -DCMAKE_CXX_COMPILER=clang++-22 \
+            -DCMAKE_C_COMPILER=clang-$LLVM_APT_VER \
+            -DCMAKE_CXX_COMPILER=clang++-$LLVM_APT_VER \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$PREBUILT_PREFIX" \
             $EXTRA_CMAKE

@@ -569,7 +569,7 @@ jobs:
             [ "$REMAINING" -gt 900 ] && CAP=900 || CAP="$REMAINING"
 
             echo "=== [BUILD] $target (elapsed: ${ELAPSED}s, cap: ${CAP}s) ==="
-            if timeout --signal=TERM --kill-after=30s "${CAP}s" cmake --build "$BUILD_DIR" --target "$target"; then
+            if timeout --foreground -s KILL "${CAP}s" cmake --build "$BUILD_DIR" --target "$target"; then
               cp -P "$BUILD_DIR/lib/lib${target}."* "$PREBUILT_PREFIX/lib/" 2>/dev/null || true
               cp -P "$BUILD_DIR/lib/${target}.lib" "$PREBUILT_PREFIX/lib/" 2>/dev/null || true
               find "$BUILD_DIR" -type d -name "${target}.dir" -exec rm -rf {} + 2>/dev/null || true
@@ -588,7 +588,7 @@ jobs:
             fi
             REMAINING=$(( ${HARD_LIMIT_SEC:-2520} - ELAPSED ))
             echo "=== [BUILD] Compiler-RT (ASan/UBSan/TSan/Builtins) & Runtimes (cap: ${REMAINING}s) ==="
-            if timeout --signal=TERM --kill-after=30s "${REMAINING}s" cmake --build "$BUILD_DIR" --target runtimes install-runtimes; then
+            if timeout --foreground -s KILL "${REMAINING}s" cmake --build "$BUILD_DIR" --target runtimes install-runtimes; then
               touch "$PREBUILT_PREFIX/.runtimes-done"
             else
               echo "[TIMEOUT/ERROR] Runtimes interrupted — partial objects saved in ccache."
@@ -612,6 +612,7 @@ jobs:
           LLVM_TAG: ${{ inputs.llvm_tag }}
           LLVM_TARGETS: ${{ inputs.llvm_targets }}
         run: |
+          trap 'kill -9 0 2>/dev/null || true' INT TERM
           set -o pipefail
 
           if [ "$TARGET_OS" = "windows-xwin" ]; then
@@ -669,7 +670,7 @@ jobs:
 
           if [ -n "$USER_PROMPT" ] || [ "$BUILD_OK" != "true" ]; then
             printf '%s\n' "$FINAL_PROMPT" | /usr/bin/time -f "%M" -o /tmp/agent-mem-kb.txt \
-              timeout --signal=TERM --kill-after=30s 43m \
+              timeout --foreground -s KILL 43m \
               "$HOME/.local/bin/llama-agent" \
               --backend local \
               --offline \
@@ -686,7 +687,7 @@ jobs:
 
       - name: Upload checkpoint & auto-dispatch next slice for ${{ matrix.suite_id }} if needed
         id: checkpoint
-        if: always()
+        if: always() && !cancelled()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -753,7 +754,7 @@ jobs:
   # Job 2A: Linux verification across x86_64, arm64 (QEMU), and armhf (QEMU)
   verify-linux:
     needs: incremental-build
-    if: always() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'linux-all' || startsWith(inputs.target_suite, 'linux-'))
+    if: always() && !cancelled() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'linux-all' || startsWith(inputs.target_suite, 'linux-'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -862,7 +863,7 @@ jobs:
   # Job 2B: Native Windows verification across x86_64 (windows-latest) and ARM64 (windows-11-arm)
   verify-windows:
     needs: incremental-build
-    if: always() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'windows-all' || startsWith(inputs.target_suite, 'windows-'))
+    if: always() && !cancelled() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'windows-all' || startsWith(inputs.target_suite, 'windows-'))
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -960,7 +961,7 @@ jobs:
   # Job 2C: Android NDK verification across all 4 ABIs
   verify-android:
     needs: incremental-build
-    if: always() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'android-all' || startsWith(inputs.target_suite, 'android-'))
+    if: always() && !cancelled() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'android-all' || startsWith(inputs.target_suite, 'android-'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -1050,7 +1051,7 @@ jobs:
   # Job 2D: Native macOS verification across arm64 and x86_64 on macos-latest
   verify-macos:
     needs: incremental-build
-    if: always() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'macos-all' || startsWith(inputs.target_suite, 'macos-'))
+    if: always() && !cancelled() && needs.incremental-build.result == 'success' && (inputs.target_suite == 'all' || inputs.target_suite == 'macos-all' || startsWith(inputs.target_suite, 'macos-'))
     runs-on: macos-latest
     timeout-minutes: 15
     strategy:

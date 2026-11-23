@@ -646,7 +646,7 @@ jobs:
                 -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_TERMINFO=OFF
               /usr/local/bin/build-incremental.sh /tmp/llvm-build llvm-libraries clang-libraries lld-libraries liblldb
               if [ "$(cat /tmp/inc-status/done 2>/dev/null)" = "true" ]; then
-                cmake --build /tmp/llvm-build --target install-llvm-headers install-clang-headers install-lld-headers install-lldb-headers install-cmake-exports install-clang-cmake-exports install-lld-cmake-exports
+                cmake --build /tmp/llvm-build --target install-llvm-headers install-clang-headers install-lld-headers install-lldb-headers install-cmake-exports install-clang-cmake-exports install-lld
               fi
             } 2>&1 | tee "inc-direct-${{ matrix.suite_id }}-slice-${{ inputs.slice }}.log" || BUILD_OK=false
           fi

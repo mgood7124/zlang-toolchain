@@ -49,7 +49,7 @@ env:
   DEFAULT_PROMPT: |
     Create a minimal, clean C++ CMake project efficiently:
     1. Use a single top-level `CMakeLists.txt` without nested project files. Pass compiler flags (`-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache`) via CLI rather than hardcoding them inside `CMakeLists.txt`.
-    2. Prefer zero-dependency standard C++ unit tests. If using Catch2 via `FetchContent`, pin `GIT_TAG v3.7.1` and link `Catch2::Catch2WithMain` directly. Use `apt-get` for large system libraries like LLVM instead of building them from source.
+    2. Prefer zero-dependency standard C++ unit tests. If using Catch2 via `FetchContent`, pin `GIT_TAG v3.7.1`, link `Catch2::Catch2WithMain` directly, and include `<catch2/catch_test_macros.hpp>` (never `<catch2/catch.hpp>`). Use `apt-get` for large system libraries like LLVM instead of building them from source.
     3. Run configuration, building, and testing in a single CLI pipeline: `cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache && cmake --build build && ctest --test-dir build --output-on-failure --timeout 30`.
     4. Avoid running `rm -rf build` across iterations so that cached dependencies remain intact; fix code errors in place and re-run the build command.
     IMPORTANT: Target specific paths only and never print build/ or .git/.

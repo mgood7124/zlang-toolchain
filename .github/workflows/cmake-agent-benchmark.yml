@@ -640,8 +640,9 @@ jobs:
           FINAL_PROMPT="${TRIMMED_USER_PROMPT:-$DEFAULT_PROMPT}"
           printf '%s\n' "$FINAL_PROMPT" > /tmp/final-prompt.txt
 
+          trap 'kill -9 0 2>/dev/null || true' INT TERM
           printf '%s\n' "$FINAL_PROMPT" | /usr/bin/time -f "%M" -o /tmp/agent-mem-kb.txt \
-            timeout --signal=TERM --kill-after=30s 45m \
+            timeout --foreground -s KILL 45m \
             "$HOME/.local/bin/llama-agent" \
             --backend local \
             --offline \
@@ -656,7 +657,7 @@ jobs:
             2>&1 | tee "agent-output-${{ matrix.id }}.log"
 
       - name: Inspect generated files & upload to Gist (${{ matrix.id }})
-        if: always()
+        if: always() && !cancelled()
         env:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
         run: |
@@ -759,7 +760,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload model evaluation artifacts
-        if: always()
+        if: always() && !cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: cmake-eval-${{ matrix.id }}
@@ -769,7 +770,7 @@ jobs:
             patch-${{ matrix.id }}.diff
 
       - name: 1. Verify llama-agent execution (${{ matrix.id }})
-        if: always()
+        if: always() && !cancelled()
         run: |
           OUTCOME="${{ steps.run-agent.outcome }}"
           LOG_FILE="agent-output-${{ matrix.id }}.log"
@@ -795,7 +796,7 @@ jobs:
           fi
 
       - name: 2. Verify CMake configure (${{ matrix.id }})
-        if: always()
+        if: always() && !cancelled()
         run: |
           rm -rf build/CMakeCache.txt build/CMakeFiles
           if cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache; then
@@ -806,7 +807,7 @@ jobs:
           fi
 
       - name: 3. Verify C++ build (${{ matrix.id }})
-        if: always()
+        if: always() && !cancelled()
         run: |
           if cmake --build build; then
             echo "- **3. C++ Build (Clang):** PASSED" >> "$GITHUB_STEP_SUMMARY"
@@ -816,7 +817,7 @@ jobs:
           fi
 
       - name: 4. Verify CTest unit tests (${{ matrix.id }})
-        if: always()
+        if: always() && !cancelled()
         run: |
           if ctest --test-dir build --output-on-failure --timeout 30; then
             echo "- **4. CTest Suite:** PASSED" >> "$GITHUB_STEP_SUMMARY"

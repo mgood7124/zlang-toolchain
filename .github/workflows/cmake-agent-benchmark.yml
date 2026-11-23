@@ -47,11 +47,11 @@ env:
   CXX: clang++
   LDFLAGS: -fuse-ld=lld
   DEFAULT_PROMPT: |
-    Create a minimal, clean C++ CMake project in as few tool calls as possible:
-    1. Use a SINGLE top-level CMakeLists.txt (do NOT create nested src/CMakeLists.txt or tests/CMakeLists.txt files). Register source files directly via relative paths (src/... and tests/...) and include both enable_testing() and add_test() for the test executable. Do NOT hardcode g++ or gcc—use LLVM Clang (CC=clang, CXX=clang++).
-    2. Write one header and one source file in src/, plus one standalone non-interactive unit test file in tests/ (never read from stdin/std::cin). Prefer standard C++ (e.g., CHECK(expr)/CHECK_EQ(a, b) macros printing __FILE__:__LINE__, #expr, and got/expected values to std::cerr and exiting non-zero on failure). For small external libraries (e.g., Catch2, fmt, nlohmann_json), use CMake `FetchContent` (cached in `$FETCHCONTENT_BASE_DIR`). NEVER build huge dependencies like LLVM or Skia from source via `FetchContent`—if LLVM is needed, install precompiled `llvm-dev` via `sudo apt-get update && sudo apt-get install -y llvm-dev` and use `find_package(LLVM REQUIRED CONFIG)`. Note: the write tool creates parent directories automatically, so skip manual mkdir/ls checks.
-    3. Configure, build, and run tests in a SINGLE bash command: cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ && cmake --build build && ctest --test-dir build --output-on-failure --timeout 30
-    4. Fix any compiler warnings, linker errors, or failing assertions until the build and all tests pass.
+    Create a minimal, clean C++ CMake project efficiently:
+    1. Use a single top-level `CMakeLists.txt` without nested project files. Pass compiler flags (`-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache`) via CLI rather than hardcoding them inside `CMakeLists.txt`.
+    2. Prefer zero-dependency standard C++ unit tests. If using Catch2 via `FetchContent`, pin `GIT_TAG v3.7.1` and link `Catch2::Catch2WithMain` directly. Use `apt-get` for large system libraries like LLVM instead of building them from source.
+    3. Run configuration, building, and testing in a single CLI pipeline: `cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache && cmake --build build && ctest --test-dir build --output-on-failure --timeout 30`.
+    4. Avoid running `rm -rf build` across iterations so that cached dependencies remain intact; fix code errors in place and re-run the build command.
     IMPORTANT: Target specific paths only and never print build/ or .git/.
     
 jobs:
@@ -601,13 +601,13 @@ jobs:
 
       - name: Ensure CMake & LLVM/Clang build tools are available
         run: |
-          if command -v cmake >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 && command -v clang++ >/dev/null 2>&1 && command -v ld.lld >/dev/null 2>&1 && [ -x /usr/bin/time ]; then
-            echo "cmake, ninja, clang, clang++, lld, and /usr/bin/time already preinstalled — skipping apt-get."
+          if command -v cmake >/dev/null 2>&1 && command -v ninja >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 && command -v clang++ >/dev/null 2>&1 && command -v ld.lld >/dev/null 2>&1 && command -v ccache >/dev/null 2>&1 && [ -x /usr/bin/time ]; then
+            echo "cmake, ninja, clang, clang++, lld, ccache, and /usr/bin/time already preinstalled — skipping apt-get."
             exit 0
           fi
           mkdir -p /tmp/apt-debs
           sudo apt-get update
-          sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" cmake ninja-build clang lld time
+          sudo apt-get install -y -o Dir::Cache::archives="/tmp/apt-debs" cmake ninja-build ccache clang lld time
 
       - name: Run CMake multi-step agent loop (${{ matrix.id }})
         id: run-agent
@@ -647,7 +647,7 @@ jobs:
             --offline \
             --yolo \
             --no-session \
-            --max-iterations 60 \
+            --max-iterations 25 \
             --jinja \
             -m "$MODEL_PATH" \
             --threads 4 \
@@ -798,7 +798,7 @@ jobs:
         if: always()
         run: |
           rm -rf build/CMakeCache.txt build/CMakeFiles
-          if cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++; then
+          if cmake -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache; then
             echo "- **2. CMake Configure (Clang):** PASSED" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "- **2. CMake Configure (Clang):** FAILED (Invalid CMakeLists.txt)" >> "$GITHUB_STEP_SUMMARY"

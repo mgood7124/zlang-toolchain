@@ -623,10 +623,32 @@ jobs:
           elif [ "$TARGET_OS" = "macos" ]; then
             CMAKE_EXTRA_FLAGS="-DCMAKE_TOOLCHAIN_FILE=/tmp/macos-darwin-toolchain.cmake -DCROSS_TOOLCHAIN_FLAGS_NATIVE=-DCMAKE_C_COMPILER=/usr/local/bin/clang;-DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_ENABLE_RUNTIMES=compiler-rt -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON -DCOMPILER_RT_ENABLE_IOS=OFF -DCOMPILER_RT_ENABLE_WATCHOS=OFF -DCOMPILER_RT_ENABLE_TVOS=OFF -DLLDB_ENABLE_PYTHON=OFF -DLLDB_ENABLE_LIBXML2=OFF -DLLDB_USE_SYSTEM_DEBUGSERVER=ON"
           else
-            CMAKE_EXTRA_FLAGS="-DCMAKE_C_COMPILER=/usr/local/bin/clang -DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_USE_LINKER=lld -DLLVM_ENABLE_RUNTIMES=compiler-rt;libcxx;libcxxabi;libunwind -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON"
+            RT_EXTRA="-DLIBCXX_USE_COMPILER_RT=ON -DLIBCXXABI_USE_COMPILER_RT=ON"
+            RT_EXTRA="$RT_EXTRA -DLIBCXXABI_USE_LLVM_UNWINDER=ON -DCOMPILER_RT_USE_BUILTINS_LIBRARY=ON"
+            CMAKE_EXTRA_FLAGS="-DCMAKE_C_COMPILER=/usr/local/bin/clang -DCMAKE_CXX_COMPILER=/usr/local/bin/clang++ -DLLVM_USE_LINKER=lld -DLLVM_ENABLE_RUNTIMES=compiler-rt;libcxx;libcxxabi;libunwind -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=ON -DCOMPILER_RT_BUILD_PROFILE=ON $RT_EXTRA"
           fi
 
           LLVM_GIT_URL="$(cat $URL_DIR/llvm_git.url)"
+          
+          BUILD_OK=true
+          if [ -z "$USER_PROMPT" ]; then
+            {
+              set -e
+              [ -d /tmp/llvm-src ] || git clone --depth 1 --branch "$LLVM_TAG" "$LLVM_GIT_URL" /tmp/llvm-src
+              cmake -S /tmp/llvm-src/llvm -B /tmp/llvm-build -G Ninja -DCMAKE_BUILD_TYPE=Release $CMAKE_EXTRA_FLAGS \
+                -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+                -DCMAKE_INSTALL_PREFIX="$PREBUILT_PREFIX" -DLLVM_ENABLE_PROJECTS="clang;lld;lldb" \
+                -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS" -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_TOOLS=ON \
+                -DLLVM_INCLUDE_UTILS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF \
+                -DCLANG_BUILD_TOOLS=OFF -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF \
+                -DLLD_BUILD_TOOLS=OFF -DLLDB_INCLUDE_TESTS=OFF \
+                -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_TERMINFO=OFF
+              /usr/local/bin/build-incremental.sh /tmp/llvm-build llvm-libraries clang-libraries lld-libraries liblldb
+              if [ "$(cat /tmp/inc-status/done 2>/dev/null)" = "true" ]; then
+                cmake --build /tmp/llvm-build --target install-llvm-headers install-clang-headers install-lld-headers install-lldb-headers install-cmake-exports install-clang-cmake-exports install-lld-cmake-exports
+              fi
+            } 2>&1 | tee "inc-direct-${{ matrix.suite_id }}-slice-${{ inputs.slice }}.log" || BUILD_OK=false
+          fi
           
           if [ -n "$USER_PROMPT" ]; then
             FINAL_PROMPT="$USER_PROMPT"
@@ -635,7 +657,7 @@ jobs:
           Build the complete LLVM + Clang + LLD + LLDB + Compiler-RT (ASan/UBSan/TSan/Builtins) library and header suite incrementally into $PREBUILT_PREFIX (target OS: $TARGET_OS, arch: $TARGET_ARCH):
           1. If /tmp/llvm-src does not exist, run: git clone --depth 1 --branch $LLVM_TAG $LLVM_GIT_URL /tmp/llvm-src
           2. Configure the full toolchain with CMake + Ninja + ccache into /tmp/llvm-build:
-             cmake -S /tmp/llvm-src/llvm -B /tmp/llvm-build -G Ninja -DCMAKE_BUILD_TYPE=Release $CMAKE_EXTRA_FLAGS -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_INSTALL_PREFIX=$PREBUILT_PREFIX -DLLVM_ENABLE_PROJECTS="clang;lld;lldb" -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS" -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_TOOLS=OFF -DLLVM_INCLUDE_UTILS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF -DCLANG_BUILD_TOOLS=OFF -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF -DLLD_BUILD_TOOLS=OFF -DLLDB_INCLUDE_TESTS=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_TERMINFO=OFF
+             cmake -S /tmp/llvm-src/llvm -B /tmp/llvm-build -G Ninja -DCMAKE_BUILD_TYPE=Release $CMAKE_EXTRA_FLAGS -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_INSTALL_PREFIX=$PREBUILT_PREFIX -DLLVM_ENABLE_PROJECTS="clang;lld;lldb" -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS" -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_TOOLS=ON -DLLVM_INCLUDE_UTILS=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_BENCHMARKS=OFF -DCLANG_BUILD_TOOLS=OFF -DCLANG_INCLUDE_TESTS=OFF -DCLANG_INCLUDE_DOCS=OFF -DLLD_BUILD_TOOLS=OFF -DLLDB_INCLUDE_TESTS=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_TERMINFO=OFF
           3. Run the topological incremental builder across all LLVM, Clang, LLD, LLDB, and Compiler-RT libraries:
              /usr/local/bin/build-incremental.sh /tmp/llvm-build llvm-libraries clang-libraries lld-libraries liblldb
           4. If any compiler or CMake error occurs, diagnose and fix it, then re-run /usr/local/bin/build-incremental.sh.
@@ -645,20 +667,22 @@ jobs:
           )
           fi
 
-          printf '%s\n' "$FINAL_PROMPT" | /usr/bin/time -f "%M" -o /tmp/agent-mem-kb.txt \
-            timeout --signal=TERM --kill-after=30s 43m \
-            "$HOME/.local/bin/llama-agent" \
-            --backend local \
-            --offline \
-            --yolo \
-            --no-session \
-            --max-iterations 35 \
-            --jinja \
-            -m "$MODEL_PATH" \
-            --threads 4 \
-            --ctx-size "${{ steps.model.outputs.ctx }}" \
-            -n 8192 \
-            2>&1 | tee "inc-agent-${{ matrix.suite_id }}-slice-${{ inputs.slice }}.log"
+          if [ -n "$USER_PROMPT" ] || [ "$BUILD_OK" != "true" ]; then
+            printf '%s\n' "$FINAL_PROMPT" | /usr/bin/time -f "%M" -o /tmp/agent-mem-kb.txt \
+              timeout --signal=TERM --kill-after=30s 43m \
+              "$HOME/.local/bin/llama-agent" \
+              --backend local \
+              --offline \
+              --yolo \
+              --no-session \
+              --max-iterations 35 \
+              --jinja \
+              -m "$MODEL_PATH" \
+              --threads 4 \
+              --ctx-size "${{ steps.model.outputs.ctx }}" \
+              -n 8192 \
+              2>&1 | tee "inc-agent-${{ matrix.suite_id }}-slice-${{ inputs.slice }}.log"
+          fi
 
       - name: Upload checkpoint & auto-dispatch next slice for ${{ matrix.suite_id }} if needed
         id: checkpoint

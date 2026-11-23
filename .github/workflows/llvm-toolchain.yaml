@@ -89,7 +89,8 @@ env:
   ANDROID_NDK_HOME: /home/runner/.cache/android-ndk
   MACOS_SDK_DIR: /home/runner/.cache/macos-sdk/MacOSX.sdk
   CCACHE_DIR: /home/runner/.cache/ccache
-  CCACHE_MAXSIZE: 8G
+  CCACHE_MAXSIZE: 2G
+  CCACHE_COMPRESS: "1"
   OMP_NUM_THREADS: 4
   CC: clang
   CXX: clang++
@@ -529,6 +530,14 @@ jobs:
           mkdir -p "$PREBUILT_PREFIX/bin" "$PREBUILT_PREFIX/lib" /tmp/inc-status
           echo "false" > /tmp/inc-status/done
 
+          save_inc_cache() {
+            if [ -d "$BUILD_DIR" ]; then
+              mkdir -p "$PREBUILT_PREFIX/inc-cache"
+              (cd "$BUILD_DIR" && find include tools/clang/include tools/lld tools/lldb -type f -name "*.inc" -exec install -D -m 644 {} "$PREBUILT_PREFIX/inc-cache/{}" \; 2>/dev/null || true)
+            fi
+          }
+          trap save_inc_cache EXIT
+          
           # 1. Build & cache host TableGen tools (llvm-tblgen, clang-tblgen, lldb-tblgen) first
           for tbl in llvm-tblgen clang-tblgen lldb-tblgen; do
             if [ -x "$PREBUILT_PREFIX/bin/$tbl" ]; then
@@ -547,6 +556,17 @@ jobs:
             fi
           done
 
+          # Pre-populate build/lib with already-cached archives so Ninja skips rebuilding or replaying .o files for them
+          mkdir -p "$BUILD_DIR/lib"
+          cp -n "$PREBUILT_PREFIX/lib/"* "$BUILD_DIR/lib/" 2>/dev/null || true
+          touch "$BUILD_DIR/lib/"* 2>/dev/null || true
+          
+          # Restore cached TableGen .inc headers so Ninja skips re-running llvm-tblgen/clang-tblgen across slices
+          if [ -d "$PREBUILT_PREFIX/inc-cache" ]; then
+            (cd "$PREBUILT_PREFIX/inc-cache" && find . -type f -name "*.inc" -exec install -D -m 644 {} "$BUILD_DIR/{}" \;)
+            find "$BUILD_DIR" -type f -name "*.inc" -exec touch {} + 2>/dev/null || true
+          fi
+          
           # 2. Extract transitive LLVM, Clang, LLD & LLDB library targets in topological order
           TARGETS=$(ninja -C "$BUILD_DIR" -t inputs "${ROOT_TARGETS[@]}" | grep -oE 'lib/(lib)?[A-Za-z0-9_+-]+\.(a|so|lib|dylib)' | sed -E 's|^lib/(lib)?||; s|\.(a|so|lib|dylib)$||' | awk '!seen[$0]++')
 
